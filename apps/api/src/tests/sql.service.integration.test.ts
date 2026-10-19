@@ -1,20 +1,28 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 
-import { env } from '../config/env.js';
 import { prepararBanco } from '../database/setup.js';
 import { executarConsulta, explicarConsulta } from '../services/sql.service.js';
 
+/**
+ * A suíte roda contra o banco de teste: o `setup.ts` redireciona
+ * `DATABASE_URL` para `TEST_DATABASE_URL` antes de qualquer import, e o
+ * `global-setup.ts` recria o esquema e a carga antes dos testes.
+ */
 let pool: pg.Pool;
 
 beforeAll(async () => {
   pool = new pg.Pool({
-    connectionString: env.testDatabaseUrl,
+    connectionString: process.env.TEST_DATABASE_URL,
     max: 5,
     connectionTimeoutMillis: 10_000,
   });
   await prepararBanco(pool);
 }, 60_000);
+
+afterAll(async () => {
+  await pool?.end();
+});
 
 /**
  * A proteção do laboratório não depende de a API confiar no texto da consulta:
@@ -85,7 +93,7 @@ describe('execução segura de consultas', () => {
   it('trunca o resultado no limite configurado', async () => {
     const resultado = await executarConsulta('SELECT codigo FROM clientes');
     expect(resultado.ok).toBe(true);
-    expect(resultado.linhas.length).toBeLessThanOrEqual(env.maxResultRows);
+    expect(resultado.linhas.length).toBeLessThanOrEqual(200);
     expect(resultado.truncado).toBe(false);
   });
 

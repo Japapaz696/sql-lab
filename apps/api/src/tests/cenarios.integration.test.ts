@@ -1,22 +1,33 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import pg from 'pg';
 
-import { env } from '../config/env.js';
 import { prepararBanco } from '../database/setup.js';
 import { cenarios } from '../scenarios/index.js';
 import { executarConsulta } from '../services/sql.service.js';
 import { compararResultados } from '../services/scenarios.service.js';
-import pg from 'pg';
 
+/**
+ * A suíte roda contra o banco de teste: o `setup.ts` redireciona
+ * `DATABASE_URL` para `TEST_DATABASE_URL` antes de qualquer import, e o
+ * `global-setup.ts` recria o esquema e a carga antes dos testes.
+ *
+ * Este `beforeAll` só existe para garantir o estado dentro do próprio
+ * arquivo — a carga é idempotente, então rodá-la de novo não muda nada.
+ */
 let pool: pg.Pool;
 
 beforeAll(async () => {
   pool = new pg.Pool({
-    connectionString: env.testDatabaseUrl,
+    connectionString: process.env.TEST_DATABASE_URL,
     max: 5,
     connectionTimeoutMillis: 10_000,
   });
   await prepararBanco(pool);
 }, 60_000);
+
+afterAll(async () => {
+  await pool?.end();
+});
 
 describe('carga de dados fictícios', () => {
   it('popula todas as tabelas do ERP', async () => {
@@ -154,13 +165,6 @@ describe('cenários do laboratório', () => {
     expect(Number(resultado.linhas[0]?.[3])).toBe(95);
   });
 
-  it('o cenário de movimentação devolve os dois produtos sem movimento', async () => {
-    const resultado = await executarConsulta(
-      cenarios.find((c) => c.id === 'produto-sem-movimentacao')!.sqlReferencia,
-    );
-    expect(resultado.linhas.map((linha) => linha[0])).toEqual(['PROD-005', 'PROD-006']);
-  });
-
   it('o cenário de estoque negativo acha só o PROD-004', async () => {
     const resultado = await executarConsulta(
       cenarios.find((c) => c.id === 'estoque-availability-negativa')!.sqlReferencia,
@@ -173,6 +177,13 @@ describe('cenários do laboratório', () => {
       cenarios.find((c) => c.id === 'limite-credito-estourado')!.sqlReferencia,
     );
     expect(resultado.linhas.map((linha) => linha[0])).toEqual(['CLI-0002']);
+  });
+
+  it('o cenário de movimentação devolve os dois produtos sem movimento', async () => {
+    const resultado = await executarConsulta(
+      cenarios.find((c) => c.id === 'produto-sem-movimentacao')!.sqlReferencia,
+    );
+    expect(resultado.linhas.map((linha) => linha[0])).toEqual(['PROD-005', 'PROD-006']);
   });
 
   it('o cenário de título vencido acha os dois pendentes vencidos', async () => {
