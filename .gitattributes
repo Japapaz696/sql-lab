@@ -1,0 +1,15 @@
+# Normaliza finais de linha no repositório.
+# Sem isso, um clone no Windows (core.autocrlf=true) converte os arquivos de
+# texto para CRLF e o "npm run format:check" passa a falhar.
+* text=auto eol=lf
+
+# Binários e artefatos de mídia não devem sofrer conversão.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.mp4 binary
+*.pdf binary
+*.xlsx binary
