@@ -6,7 +6,8 @@ name: Publicar a interface no GitHub Pages
 # Antes de rodar a primeira vez:
 #
 #   1. no repositório, Settings -> Pages -> Source = "GitHub Actions";
-#   2. preencha a URL da API (a do Render), sem barra final.
+#   2. confira a URL da API e o caminho base (os padrões já são os da
+#      demonstração).
 #
 # A URL da API é lida na hora do build: mudá-la exige rodar o workflow de
 # novo.
@@ -15,14 +16,15 @@ on:
   workflow_dispatch:
     inputs:
       api_url:
-        description: 'URL da API publicada, sem barra final (ex.: https://sql-lab-api.onrender.com)'
-        required: true
-        type: string
-      base_path:
-        description: 'Caminho base da interface (ex.: /sql-lab/). Em branco, usa caminho relativo.'
+        description: 'URL da API publicada (o caminho /api/v1 é acrescentado se faltar)'
         required: false
         type: string
-        default: ''
+        default: https://sql-lab-api-7bdv.onrender.com
+      base_path:
+        description: 'Caminho base da interface. Um repositório de usuário é servido em /<repositorio>/.'
+        required: false
+        type: string
+        default: /sql-lab/
 
 permissions:
   contents: read
@@ -52,8 +54,11 @@ jobs:
           node-version: 20
           cache: npm
 
+      # O Pages compila a interface: as devDependencies (Vite, TypeScript) são
+      # necessárias aqui. O `NODE_ENV` do job não é de produção, mas a flag
+      # deixa o comportamento explícito e independente do ambiente.
       - name: Instalar dependencias
-        run: npm ci
+        run: npm ci --include=dev
 
       - name: Configurar o Pages
         id: pages
@@ -67,13 +72,38 @@ jobs:
           npm run build --workspace=@sql-lab/shared
           npm run build --workspace=@sql-lab/web
 
-      - name: Conferir que a interface foi montada
+      # O build tem que servir a interface do jeito que ela vai ser pedida, e
+      # falar com a API no endereço certo. É aqui que uma barra a mais, ou
+      # uma URL de API sem o caminho das rotas, aparece como build quebrado —
+      # e não como demonstração que abre vazia.
+      - name: Conferir a montagem
         run: |
-          if [ ! -f apps/web/dist/index.html ]; then
-            echo "ERRO: apps/web/dist/index.html nao foi gerado."
+          test -f apps/web/dist/index.html || { echo "ERRO: a interface nao foi montada."; exit 1; }
+
+          if grep -q 'src="/assets/' apps/web/dist/index.html; then
+            echo "ERRO: a interface usa caminho absoluto e nao funciona em subcaminho."
             exit 1
           fi
-          echo "ok: a interface foi montada"
+
+          if ! grep -q "${{ inputs.base_path }}assets/" apps/web/dist/index.html; then
+            echo "ERRO: os arquivos nao apontam para o caminho base '${{ inputs.base_path }}'."
+            cat apps/web/dist/index.html
+            exit 1
+          fi
+
+          if ! grep -q "${{ inputs.api_url }}" apps/web/dist/assets/*.js; then
+            echo "ERRO: a URL da API nao entrou no bundle da interface."
+            exit 1
+          fi
+
+          # O bundle é público: não pode carregar string de conexão com
+          # credencial nem nome de variável de ambiente do servidor.
+          if grep -rqE "postgres(ql)?://[^:]+:[^@[:space:]]+@|DATABASE_URL|DATABASE_ADMIN_URL|SQL_LAB_EXEC_PASSWORD" apps/web/dist/assets/*.js; then
+            echo "ERRO: o bundle da interface contem algo que parece credencial."
+            exit 1
+          fi
+
+          echo "ok: a interface foi montada para ${{ inputs.base_path }} e aponta para a API"
 
       - name: Enviar o artefato
         uses: actions/upload-pages-artifact@v3
