@@ -6,13 +6,46 @@ import type {
 } from '@sql-lab/shared';
 
 /**
- * Endereço da API.
+ * Caminho em que as rotas da API vivem.
+ *
+ * O servidor monta as rotas em `/api/v1`. A interface usa esse prefixo
+ * desde o começo do projeto, e a publicação não pode esquecê-lo: pedir
+ * `https://api.exemplo.com/scenarios` devolve 404, porque a rota real é
+ * `https://api.exemplo.com/api/v1/scenarios`.
+ */
+const CAMINHO_DA_API = '/api/v1';
+
+/**
+ * Normaliza o endereço da API.
  *
  * Em desenvolvimento, a interface e a API são servidas pelo mesmo host, e o
- * proxy do Vite encaminha `/api` para o backend. Em publicação, a API pode
- * estar em outro host: defina `VITE_API_URL` na hora do build.
+ * proxy do Vite encaminha `/api` para o backend — por isso o padrão é um
+ * caminho relativo.
+ *
+ * Em publicação, a API fica em outro host: defina `VITE_API_URL` na hora do
+ * build. O valor pode ser a origem pura (`https://api.exemplo.com`) ou a base
+ * completa (`https://api.exemplo.com/api/v1`). Nos dois casos o resultado é a
+ * base certa — assim não é possível publicar uma demonstração que dá 404 em
+ * toda requisição, por causa de uma barra a mais ou a menos.
  */
-const API = (import.meta.env.VITE_API_URL ?? '/api/v1').replace(/\/$/, '');
+export function normalizarBaseDaApi(bruto: string): string {
+  const semBarra = bruto.trim().replace(/\/+$/, '');
+  if (!semBarra) return CAMINHO_DA_API;
+
+  try {
+    const url = new URL(semBarra);
+    // Só a origem: acrescenta o caminho em que as rotas vivem.
+    if (url.pathname === '' || url.pathname === '/') {
+      return `${semBarra}${CAMINHO_DA_API}`;
+    }
+  } catch {
+    // Não é uma URL absoluta: é um caminho relativo (uso em desenvolvimento).
+  }
+
+  return semBarra;
+}
+
+const API = normalizarBaseDaApi(import.meta.env.VITE_API_URL ?? CAMINHO_DA_API);
 
 /**
  * Identificador da sessão de trabalho.

@@ -1,6 +1,50 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ErroDeApi, idDaSessao } from './api';
+import { ErroDeApi, idDaSessao, normalizarBaseDaApi } from './api';
+
+/**
+ * O endereço da API publicado precisa apontar para as rotas que existem.
+ *
+ * O servidor monta as rotas em `/api/v1`. Se a publicação mandar só a
+ * origem, toda requisição devolve 404 — e a demonstração abre vazia, sem
+ * nenhum erro visível na tela.
+ */
+describe('endereço da API', () => {
+  it('acrescenta o caminho das rotas quando a origem é pura', () => {
+    expect(normalizarBaseDaApi('https://sql-lab-api.exemplo.onrender.com')).toBe(
+      'https://sql-lab-api.exemplo.onrender.com/api/v1',
+    );
+  });
+
+  it('aceita a base completa sem acrescentar nada', () => {
+    expect(normalizarBaseDaApi('https://api.exemplo.com/api/v1')).toBe(
+      'https://api.exemplo.com/api/v1',
+    );
+  });
+
+  it('ignora barra final e espaços', () => {
+    expect(normalizarBaseDaApi('  https://api.exemplo.com/  ')).toBe(
+      'https://api.exemplo.com/api/v1',
+    );
+    expect(normalizarBaseDaApi('https://api.exemplo.com/api/v1/')).toBe(
+      'https://api.exemplo.com/api/v1',
+    );
+  });
+
+  it('mantém o caminho relativo do desenvolvimento', () => {
+    expect(normalizarBaseDaApi('/api/v1')).toBe('/api/v1');
+  });
+
+  it('usa o caminho da API quando o valor vem vazio', () => {
+    expect(normalizarBaseDaApi('')).toBe('/api/v1');
+  });
+
+  it('preserva um caminho próprio, quando a API não está na raiz', () => {
+    expect(normalizarBaseDaApi('https://api.exemplo.com/lab/api/v1')).toBe(
+      'https://api.exemplo.com/lab/api/v1',
+    );
+  });
+});
 
 describe('cliente da API', () => {
   afterEach(() => {
@@ -22,6 +66,21 @@ describe('cliente da API', () => {
     const [, opcoes] = spy.mock.calls[0] as [string, RequestInit];
     const headers = opcoes.headers as Headers;
     expect(headers.get('X-Sessao-Id')).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it('chama a rota que existe no servidor', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ cenarios: [] }),
+    });
+    vi.stubGlobal('fetch', spy);
+
+    const { listarCenarios } = await import('./api');
+    await listarCenarios();
+
+    const [url] = spy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/v1/scenarios');
   });
 
   it('usa a mensagem do servidor no erro', async () => {
