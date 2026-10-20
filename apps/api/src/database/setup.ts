@@ -131,9 +131,27 @@ export async function prepararBanco(alvo?: pg.Pool): Promise<void> {
 
       // A senha do papel de execução chega por parâmetro, por set_config.
       // Nunca é concatenada no texto do SQL, e nunca fica no repositório.
-      const senha = process.env.SQL_LAB_EXEC_PASSWORD as string;
-      await client.query("SELECT set_config('sql_lab.exec_password', $1, true)", [senha]);
-      await client.query(privilegios);
+      //
+      // As concessões vão dentro de um savepoint: se o administrador não puder
+      // criar papéis — o que acontece em hospedagens gerenciadas, onde o dono
+      // não é superusuário — a falha fica contida, o esquema e a carga são
+      // preservados, e o aviso abaixo diz o que fazer.
+      await client.query('SAVEPOINT concessoes');
+      try {
+        const senha = process.env.SQL_LAB_EXEC_PASSWORD as string;
+        await client.query("SELECT set_config('sql_lab.exec_password', $1, true)", [senha]);
+        await client.query(privilegios);
+        await client.query('RELEASE SAVEPOINT concessoes');
+      } catch (erro) {
+        await client.query('ROLLBACK TO SAVEPOINT concessoes').catch(() => undefined);
+        const mensagem = erro instanceof Error ? erro.message : String(erro);
+        console.warn(
+          `Aviso: a separacao de privilegios nao foi aplicada (${mensagem.split('\n')[0]}). ` +
+            'O laboratorio continua protegido pela transacao somente leitura e pelo protocolo ' +
+            'estendido, mas a camada de privilegio de banco nao esta de pe — e a API nao vai ' +
+            'subir em producao.',
+        );
+      }
 
       await client.query('COMMIT');
     } catch (erro) {

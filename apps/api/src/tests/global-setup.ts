@@ -47,8 +47,13 @@ export async function setup(): Promise<void> {
 
       // As concessões para o papel de execução. A senha chega por parâmetro,
       // via set_config: nunca é concatenada no texto do SQL.
+      //
+      // O savepoint mantém a falha contida: se o papel não puder ser criado,
+      // o esquema e a carga sobrevivem, e a suíte segue protegida pela
+      // transação somente leitura e pelo protocolo estendido.
       const senha = process.env.SQL_LAB_EXEC_PASSWORD;
       if (senha) {
+        await client.query('SAVEPOINT concessoes');
         try {
           const privilegios = await fs.readFile(
             resolve(raizDoProjeto, 'db', 'privilegios.sql'),
@@ -56,7 +61,9 @@ export async function setup(): Promise<void> {
           );
           await client.query("SELECT set_config('sql_lab.exec_password', $1, true)", [senha]);
           await client.query(privilegios);
+          await client.query('RELEASE SAVEPOINT concessoes');
         } catch (erro) {
+          await client.query('ROLLBACK TO SAVEPOINT concessoes').catch(() => undefined);
           const mensagem = erro instanceof Error ? erro.message : String(erro);
           console.warn(
             `Aviso: separacao de privilegios nao aplicada (${mensagem.split('\n')[0]}). ` +
