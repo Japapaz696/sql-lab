@@ -1,0 +1,85 @@
+name: Publicar a interface no GitHub Pages
+
+# Este workflow é manual de propósito: o repositório fica pronto para
+# publicar, mas nada é publicado sem alguém pedir.
+#
+# Antes de rodar a primeira vez:
+#
+#   1. no repositório, Settings -> Pages -> Source = "GitHub Actions";
+#   2. preencha a URL da API (a do Render), sem barra final.
+#
+# A URL da API é lida na hora do build: mudá-la exige rodar o workflow de
+# novo.
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'URL da API publicada, sem barra final (ex.: https://sql-lab-api.onrender.com)'
+        required: true
+        type: string
+      base_path:
+        description: 'Caminho base da interface (ex.: /sql-lab/). Em branco, usa caminho relativo.'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  publicar:
+    name: Build e publicação da interface
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.publicar.outputs.page_url }}
+
+    steps:
+      - name: Fazer checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Configurar o Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Build da interface
+        env:
+          VITE_API_URL: ${{ inputs.api_url }}
+          VITE_BASE_PATH: ${{ inputs.base_path }}
+        run: |
+          npm run build --workspace=@sql-lab/shared
+          npm run build --workspace=@sql-lab/web
+
+      - name: Conferir que a interface foi montada
+        run: |
+          if [ ! -f apps/web/dist/index.html ]; then
+            echo "ERRO: apps/web/dist/index.html nao foi gerado."
+            exit 1
+          fi
+          echo "ok: a interface foi montada"
+
+      - name: Enviar o artefato
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+      - name: Publicar
+        id: publicar
+        uses: actions/deploy-pages@v4

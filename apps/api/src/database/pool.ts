@@ -6,23 +6,22 @@ import { env } from '../config/env.js';
 const { Pool } = pg;
 
 /**
- * Conexão de **consulta**: a que executa o SQL de quem usa a interface.
+ * Tempo limite para abrir uma conexão.
  *
- * `default_transaction_read_only` é a primeira camada de defesa, e fica no
- * servidor: mesmo que a aplicação erre, o banco recusa a escrita.
- *
- * A segunda camada é o papel do banco: `sql_lab_exec` tem SELECT e nada
- * mais. Se a aplicação apontar para um usuário sem esses privilégios, a
- * escrita é recusada mesmo fora de uma transação somente leitura.
- *
- * Esta conexão **não** grava nada — nem o progresso do aluno. Quem grava é a
- * conexão administrativa.
+ * Num banco que hiberna (o Neon do plano gratuito reduz a zero depois de
+ * alguns minutos sem tráfego), a primeira conexão demora um pouco mais. Com
+ * 10 segundos, a API responderia "não consegui falar com o banco" logo depois
+ * de acordar. Trinta segundos cobrem a partida a frio.
  */
+const TEMPO_DE_CONEXAO_MS = 30_000;
+
 export const pool = new Pool({
   connectionString: env.databaseUrl,
-  max: 10,
+  // O plano gratuito do Neon reserva poucas conexões: o pool é pequeno de
+  // propósito, para não ocupar o limite do projeto.
+  max: 5,
   idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 10_000,
+  connectionTimeoutMillis: TEMPO_DE_CONEXAO_MS,
   // Rede de segurança no nível da conexão: mesmo que alguém abra uma
   // transação de escrita à mão, o banco recusa.
   options: '-c default_transaction_read_only=on -c statement_timeout=10000',
@@ -41,9 +40,9 @@ pool.on('error', (erro) => {
 export const poolAdmin = env.databaseAdminUrl
   ? new Pool({
       connectionString: env.databaseAdminUrl,
-      max: 5,
+      max: 3,
       idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000,
+      connectionTimeoutMillis: TEMPO_DE_CONEXAO_MS,
     })
   : null;
 

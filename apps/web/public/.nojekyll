@@ -1,0 +1,3 @@
+# O GitHub Pages usa Jekyll por padrão, e o Jekyll ignora arquivos e pastas
+# que começam com underscore. Este arquivo vazio desliga o Jekyll, para que a
+# interface seja servida exatamente como foi montada.
