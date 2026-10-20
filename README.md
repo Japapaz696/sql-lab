@@ -136,7 +136,7 @@ npm run dev
 npm test
 ```
 
-**66 testes** em três suítes, contra um PostgreSQL de verdade:
+**70 testes** em três suítes, contra um PostgreSQL de verdade:
 
 | Suíte             | Testes | O que cobre                                                               |
 | ----------------- | ------ | ------------------------------------------------------------------------- |
@@ -197,6 +197,9 @@ sql_lab_exec   o papel que executa as consultas: SELECT e nada mais
 
 Detalhes, inclusive o que **não** está protegido, em
 [docs/SEGURANCA.md](docs/SEGURANCA.md).
+
+Para publicar a demonstração, a configuração recomendada — interface, API e banco,
+tudo em hospedagem gratuita — está em [docs/PUBLICACAO.md](docs/PUBLICACAO.md).
 
 ## Arquitetura
 
