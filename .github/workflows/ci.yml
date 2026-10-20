@@ -199,5 +199,36 @@ jobs:
             exit 1
           fi
           echo "ok: a interface foi montada com caminho relativo"
+      # O Render define NODE_ENV=production já na fase de build. Com essa
+      # variável, o npm omite as devDependencies — e é de lá que vem o
+      # TypeScript e o Vite, que compilam o projeto. Sem `--include=dev`, o
+      # build morre antes de compilar qualquer linha. O CI repete a
+      # instalação do jeito do Render, para que a falha apareça aqui e não
+      # no deploy.
+      - name: Conferir o build de producao
+        env:
+          NODE_ENV: production
+        run: |
+          rm -rf apps/api/dist apps/web/dist packages/shared/dist
+          npm ci --include=dev
+          npm run build --workspace=@sql-lab/shared
+          npm run build --workspace=@sql-lab/api
+          test -f apps/api/dist/index.js || { echo "ERRO: a API nao foi montada."; exit 1; }
+          echo "ok: a API monta com NODE_ENV=production"
+
+      # E a configuração versionada precisa trazer a flag certa, senão o
+      # serviço no Render nasce com o build quebrado.
+      - name: Conferir o comando de build do Render
+        run: |
+          if ! grep -q "npm ci --include=dev" render.yaml; then
+            echo "ERRO: o build command do Render precisa de --include=dev."
+            exit 1
+          fi
+          if ! grep -q "node apps/api/dist/index.js" render.yaml; then
+            echo "ERRO: o start command do Render nao aponta para a API montada."
+            exit 1
+          fi
+          echo "ok: a configuracao do Render instala as dependencias de build"
+
       - name: Conferir as dependencias de producao
         run: npm audit --omit=dev --audit-level=high
