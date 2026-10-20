@@ -16,7 +16,7 @@ const api = `http://localhost:${apiPort}`;
  * Com caminho relativo, os arquivos são resolvidos a partir da página — e o
  * mesmo build serve tanto a raiz quanto um subcaminho.
  */
-const base = process.env.VITE_BASE_PATH ?? './';
+const base = process.env.VITE_BASE_PATH || './';
 
 export default defineConfig({
   base,
