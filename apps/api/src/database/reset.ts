@@ -5,9 +5,12 @@ import { prepararBanco } from './setup.js';
 /**
  * Recria o schema, a carga e as concessões de privilégio.
  *
- * Usa a conexão administrativa: quem prepara o banco precisa de permissão
- * para criar tabelas e para conceder leitura ao papel de execução.
+ * A carga recria o schema inteiro, então o comando se recusa a rodar em um
+ * banco que não tenha a cara de um banco de laboratório, e exige confirmação
+ * explícita. Veja `setup.ts` para as regras.
  *
+ *   $env:SQL_LAB_CONFIRMAR_RESET = "sim"
+ *   $env:SQL_LAB_EXEC_PASSWORD = "<senha forte, 16+ caracteres>"
  *   npm run db:reset
  */
 async function principal(): Promise<void> {
@@ -39,12 +42,19 @@ async function principal(): Promise<void> {
     ORDER BY privilege_type
   `);
 
-  if (permissoes.length) {
-    console.log(`Papel de execução: ${permissoes.map((p) => p.privilege_type).join(', ')}`);
+  const tipos = permissoes.map((p) => p.privilege_type);
+  if (tipos.length === 1 && tipos[0] === 'SELECT') {
+    console.log('Papel de execução: SELECT (e nada mais)');
+  } else if (tipos.length === 0) {
+    console.log(
+      'Aviso: o papel sql_lab_exec não foi encontrado. O laboratório segue protegido ' +
+        'pela transação somente leitura e pelo protocolo estendido, mas a camada de ' +
+        'privilégio de banco não está de pé — e a API não vai subir em produção.',
+    );
   } else {
     console.log(
-      'Aviso: o papel de execução não foi encontrado. O laboratório segue protegido ' +
-        'pela transação somente leitura e pelo protocolo estendido.',
+      `Aviso: o papel de execução tem privilégios além de SELECT: ${tipos.join(', ')}. ` +
+        'Corrija antes de publicar.',
     );
   }
 

@@ -29,11 +29,15 @@ jobs:
 
     env:
       NODE_VERSION: 20
+      # Senha do papel de execução. É de um banco efêmero, que o CI cria e
+      # destrói a cada execução — não é credencial de nada que exista fora
+      # daqui. No deploy, essa senha é definida por variável de ambiente.
+      SQL_LAB_EXEC_PASSWORD: senha-ci-efemera-do-sql-lab
       # O papel de execução é o que a aplicação usa: só tem SELECT.
-      DATABASE_URL: postgresql://sql_lab_exec:sql_lab_exec@localhost:5432/sql_lab
+      DATABASE_URL: postgresql://sql_lab_exec:senha-ci-efemera-do-sql-lab@localhost:5432/sql_lab
       # O papel administrativo é o que prepara o banco.
       DATABASE_ADMIN_URL: postgresql://sql_lab:sql_lab@localhost:5432/sql_lab
-      TEST_DATABASE_URL: postgresql://sql_lab_exec:sql_lab_exec@localhost:5432/sql_lab_test
+      TEST_DATABASE_URL: postgresql://sql_lab_exec:senha-ci-efemera-do-sql-lab@localhost:5432/sql_lab_test
       TEST_DATABASE_ADMIN_URL: postgresql://sql_lab:sql_lab@localhost:5432/sql_lab_test
 
     steps:
@@ -57,6 +61,15 @@ jobs:
           fi
           echo "ok: .env nao versionado"
 
+      - name: Conferir que nenhum segredo esta versionado
+        run: |
+          if git grep -nE "postgres(ql)?://[^:]+:[^@[:space:]]+@" -- \
+            ':!*.md' ':!docs/*' ':!.github/workflows/*' | grep -v "senha-ci-efemera" | grep -v "@localhost" | grep -v "@127.0.0.1"; then
+            echo "ERRO: ha uma string de conexao com senha no repositorio."
+            exit 1
+          fi
+          echo "ok: nenhuma string de conexao com senha no repositorio"
+
       # O banco de teste precisa existir antes: a concessão de CONNECT sai
       # sobre um banco que ainda não existe.
       - name: Criar o banco de testes
@@ -74,15 +87,16 @@ jobs:
       - name: Criar o papel de execucao
         env:
           PGPASSWORD: sql_lab
+          SQL_LAB_EXEC_PASSWORD: senha-ci-efemera-do-sql-lab
         run: |
-          psql -h localhost -p 5432 -U sql_lab -d postgres -v ON_ERROR_STOP=1 <<'SQL'
-          DO $$
+          psql -h localhost -p 5432 -U sql_lab -d postgres -v ON_ERROR_STOP=1 <<SQL
+          DO \$\$
           BEGIN
             IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sql_lab_exec') THEN
-              CREATE ROLE sql_lab_exec LOGIN PASSWORD 'sql_lab_exec';
+              CREATE ROLE sql_lab_exec LOGIN PASSWORD '${SQL_LAB_EXEC_PASSWORD}';
             END IF;
           END
-          $$;
+          \$\$;
           GRANT CONNECT ON DATABASE sql_lab TO sql_lab_exec;
           GRANT CONNECT ON DATABASE sql_lab_test TO sql_lab_exec;
           SQL
@@ -91,20 +105,28 @@ jobs:
         run: npm run validate
 
       # O papel de execução não pode ter nenhum privilégio além de SELECT.
+      # A verificação usa `has_table_privilege`, que já considera os
+      # privilégios herdados por memberships: um papel sem INSERT na tabela
+      # ainda assim escreveria se pertencesse a outro papel com INSERT.
       - name: Conferir a separacao de privilegios
         env:
           PGPASSWORD: sql_lab
         run: |
           fudgy=$(psql -h localhost -p 5432 -U sql_lab -d sql_lab_test -tAc "
-             SELECT count(*) FROM information_schema.role_table_grants
-             WHERE grantee = 'sql_lab_exec'
-               AND table_schema = 'public'
-               AND privilege_type <> 'SELECT'")
-           if [ "$fudgy" != "0" ]; then
-             echo "ERRO: o papel de execucao tem $(echo "$fudgy" | tr -d ' ') privilegio(s) além de SELECT."
-             exit 1
-           fi
-           echo "ok: o papel de execucao so tem SELECT"
+             SELECT count(*) FROM pg_class c
+               JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = 'public' AND c.relkind = 'r'
+                AND has_table_privilege('sql_lab_exec', c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE')")
+          if [ "$fudgy" != "0" ]; then
+            echo "ERRO: o papel de execucao tem $(echo "$fudgy" | tr -d ' ') tabela(s) com privilegio de escrita."
+            exit 1
+          fi
+          if [ "$(psql -h localhost -p 5432 -U sql_lab -d sql_lab_test -tAc \
+                 "SELECT has_schema_privilege('sql_lab_exec','public','CREATE')")" != "f" ]; then
+            echo "ERRO: o papel de execucao pode criar objetos no schema."
+            exit 1
+          fi
+          echo "ok: o papel de execucao so tem SELECT"
 
       - name: Conferir as dependencias de producao
         run: npm audit --omit=dev --audit-level=high

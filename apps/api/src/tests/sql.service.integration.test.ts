@@ -18,6 +18,10 @@ let pool: pg.Pool;
 
 beforeAll(async () => {
   pool = abrirBancoAdministrativo();
+  // A preparação exige confirmação e a senha do papel de execução. Na suíte,
+  // as duas vêm do ambiente, e o banco tem nome de laboratório.
+  process.env.SQL_LAB_CONFIRMAR_RESET = 'sim';
+  process.env.SQL_LAB_EXEC_PASSWORD ??= 'senha-de-teste-da-suite';
   await prepararBanco(pool);
 }, 60_000);
 

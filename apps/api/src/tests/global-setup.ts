@@ -6,7 +6,7 @@
  * resultado de referência de cada cenário seja estável.
  *
  * A preparação usa a conexão **administrativa**: é ela que pode criar
- * tabelas e concede privilégios. As consultas da suíte usam a conexão de
+ * tabelas e conceder privilégios. As consultas da suíte usam a conexão de
  * execução, sem permissão de escrita — é a mesma que a aplicação usa.
  */
 import pg from 'pg';
@@ -28,35 +28,52 @@ export async function setup(): Promise<void> {
     throw new Error('TEST_DATABASE_URL (ou DATABASE_URL) é obrigatória para rodar a suíte');
   }
 
-  const pool = new pg.Pool({ connectionString: admin, max: 2, connectionTimeoutMillis: 15_000 });
+  const pool = new pg.Pool({ connectionString: admin, max: 2, connectionTimeoutMillis: 30_000 });
   const client = await pool.connect();
 
   try {
-    await client.query('DROP SCHEMA IF EXISTS public CASCADE');
-    await client.query('CREATE SCHEMA public');
-    await client.query('SET search_path TO public');
-
-    const fs = await import('node:fs/promises');
-    const schema = await fs.readFile(resolve(raizDoProjeto, 'db', 'schema.sql'), 'utf8');
-    const seed = await fs.readFile(resolve(raizDoProjeto, 'db', 'seed.sql'), 'utf8');
-
-    await client.query(schema);
-    await client.query(seed);
-
-    // As concessões para o papel de execução. Se o administrador não puder
-    // criar papéis, tudo bem: a proteção principal não depende de papel.
+    await client.query('BEGIN');
     try {
-      const privilegios = await fs.readFile(
-        resolve(raizDoProjeto, 'db', 'privilegios.sql'),
-        'utf8',
-      );
-      await client.query(privilegios);
+      await client.query('DROP SCHEMA IF EXISTS public CASCADE');
+      await client.query('CREATE SCHEMA public');
+      await client.query('SET LOCAL search_path TO public');
+
+      const fs = await import('node:fs/promises');
+      const schema = await fs.readFile(resolve(raizDoProjeto, 'db', 'schema.sql'), 'utf8');
+      const seed = await fs.readFile(resolve(raizDoProjeto, 'db', 'seed.sql'), 'utf8');
+
+      await client.query(schema);
+      await client.query(seed);
+
+      // As concessões para o papel de execução. A senha chega por parâmetro,
+      // via set_config: nunca é concatenada no texto do SQL.
+      const senha = process.env.SQL_LAB_EXEC_PASSWORD;
+      if (senha) {
+        try {
+          const privilegios = await fs.readFile(
+            resolve(raizDoProjeto, 'db', 'privilegios.sql'),
+            'utf8',
+          );
+          await client.query("SELECT set_config('sql_lab.exec_password', $1, true)", [senha]);
+          await client.query(privilegios);
+        } catch (erro) {
+          const mensagem = erro instanceof Error ? erro.message : String(erro);
+          console.warn(
+            `Aviso: separacao de privilegios nao aplicada (${mensagem.split('\n')[0]}). ` +
+              'A suite segue protegida pela transacao somente leitura e pelo protocolo estendido.',
+          );
+        }
+      } else {
+        console.warn(
+          'Aviso: SQL_LAB_EXEC_PASSWORD ausente, as concessoes nao foram aplicadas. ' +
+            'A suite continua protegida pela transacao somente leitura e pelo protocolo estendido.',
+        );
+      }
+
+      await client.query('COMMIT');
     } catch (erro) {
-      const mensagem = erro instanceof Error ? erro.message : String(erro);
-      console.warn(
-        `Aviso: separacao de privilegios nao aplicada (${mensagem.split('\n')[0]}). ` +
-          'A suite segue protegida pela transacao somente leitura e pelo protocolo estendido.',
-      );
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw erro;
     }
   } finally {
     client.release();
