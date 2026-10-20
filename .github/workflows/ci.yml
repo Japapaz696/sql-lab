@@ -57,6 +57,17 @@ jobs:
           fi
           echo "ok: .env nao versionado"
 
+      # O banco de teste precisa existir antes: a concessão de CONNECT sai
+      # sobre um banco que ainda não existe.
+      - name: Criar o banco de testes
+        env:
+          PGPASSWORD: sql_lab
+        run: |
+          psql -h localhost -p 5432 -U sql_lab -d postgres -v ON_ERROR_STOP=1 -tAc \
+            "SELECT 1 FROM pg_database WHERE datname='sql_lab_test'" | grep -q 1 \
+            || psql -h localhost -p 5432 -U sql_lab -d postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE sql_lab_test"
+
       # O papel de execução precisa existir antes da aplicação subir.
       # Ele tem apenas SELECT: a separação de privilégios é a terceira camada
       # de proteção, depois do protocolo estendido e da transação READ ONLY.
@@ -75,16 +86,6 @@ jobs:
           GRANT CONNECT ON DATABASE sql_lab TO sql_lab_exec;
           GRANT CONNECT ON DATABASE sql_lab_test TO sql_lab_exec;
           SQL
-
-      # O banco de teste precisa existir antes da suite.
-      - name: Criar o banco de testes
-        env:
-          PGPASSWORD: sql_lab
-        run: |
-          psql -h localhost -p 5432 -U sql_lab -d postgres -v ON_ERROR_STOP=1 -tAc \
-            "SELECT 1 FROM pg_database WHERE datname='sql_lab_test'" | grep -q 1 \
-            || psql -h localhost -p 5432 -U sql_lab -d postgres -v ON_ERROR_STOP=1 \
-            -c "CREATE DATABASE sql_lab_test"
 
       - name: Rodar a validacao completa
         run: npm run validate
