@@ -1,13 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { ExplainResponse, ScenarioDetail, ScenarioSummary } from '@sql-lab/shared';
 
+import { ExploradorEsquema } from './components/ExploradorEsquema';
 import {
   ErroDeApi,
+  buscarEsquema,
   buscarSolucao,
   detalharCenario,
   executarCenario,
   explicarCenario,
   listarCenarios,
+  type TabelaDoEsquema,
 } from './services/api';
 
 type Aba = 'cenario' | 'explicacao';
@@ -17,6 +20,7 @@ const rotulosArea: Record<string, string> = {
   faturamento: 'Faturamento',
   estoque: 'Estoque',
   cadastro: 'Cadastro',
+  logistica: 'Logística',
   relatorio: 'Relatório',
 };
 
@@ -30,6 +34,7 @@ export function App() {
   const [cenarios, setCenarios] = useState<ScenarioSummary[]>([]);
   const [selecionado, setSelecionado] = useState<string | null>(null);
   const [detalhe, setDetalhe] = useState<ScenarioDetail | null>(null);
+  const [esquema, setEsquema] = useState<TabelaDoEsquema[]>([]);
   const [sql, setSql] = useState('');
   const [resultado, setResultado] = useState<{
     colunas: string[];
@@ -40,16 +45,25 @@ export function App() {
     erro?: string;
     ok: boolean;
   } | null>(null);
-  const [feedback, setFeedback] = useState<{ acertou: boolean; texto: string } | null>(null);
+  const [feedback, setFeedback] = useState<{
+    acertou: boolean;
+    texto: string;
+    linhasEsperadas: number;
+    linhasObtidas: number;
+  } | null>(null);
   const [plano, setPlano] = useState<ExplainResponse | null>(null);
   const [erro, setErro] = useState('');
   const [carregando, setCarregando] = useState(true);
+  const [executando, setExecutando] = useState(false);
   const [aba, setAba] = useState<Aba>('cenario');
   const [dicaVisivel, setDicaVisivel] = useState(0);
+  const [esquemaAberto, setEsquemaAberto] = useState(false);
+  const [copiado, setCopiado] = useState(false);
 
-  // Carrega a lista de cenários.
+  // Carrega a lista de cenários e o esquema do banco.
   useEffect(() => {
     let cancelado = false;
+
     listarCenarios()
       .then((dados) => {
         if (cancelado) return;
@@ -67,6 +81,15 @@ export function App() {
       .finally(() => {
         if (!cancelado) setCarregando(false);
       });
+
+    buscarEsquema()
+      .then((tabelas) => {
+        if (!cancelado) setEsquema(tabelas);
+      })
+      .catch(() => {
+        // O esquema é um recurso de apoio: a falta dele não impede o uso.
+      });
+
     return () => {
       cancelado = true;
     };
@@ -103,37 +126,53 @@ export function App() {
     };
   }, [selecionado]);
 
-  async function executar() {
-    if (!selecionado) return;
+  const executar = useCallback(async () => {
+    if (!selecionado || executando) return;
     setErro('');
     setPlano(null);
+    setExecutando(true);
     try {
       const resposta = await executarCenario(selecionado, sql);
       setResultado(resposta.consulta);
-      setFeedback({ acertou: resposta.verificacao.acertou, texto: resposta.verificacao.feedback });
-      if (resposta.verificacao.acertou) {
-        setCenarios((atuais) =>
-          atuais.map((cenario) =>
-            cenario.id === selecionado
-              ? { ...cenario, resolvido: true, tentativas: resposta.tentativas }
-              : cenario,
-          ),
-        );
-      } else {
-        setCenarios((atuais) =>
-          atuais.map((cenario) =>
-            cenario.id === selecionado ? { ...cenario, tentativas: resposta.tentativas } : cenario,
-          ),
-        );
-      }
+      setFeedback({
+        acertou: resposta.verificacao.acertou,
+        texto: resposta.verificacao.feedback,
+        linhasEsperadas: resposta.verificacao.linhasEsperadas,
+        linhasObtidas: resposta.verificacao.linhasObtidas,
+      });
+      setCenarios((atuais) =>
+        atuais.map((cenario) =>
+          cenario.id === selecionado
+            ? {
+                ...cenario,
+                resolvido: cenario.resolvido || resposta.verificacao.acertou,
+                tentativas: resposta.tentativas,
+              }
+            : cenario,
+        ),
+      );
     } catch (erroDesconhecido: unknown) {
       setErro(
         erroDesconhecido instanceof ErroDeApi
           ? erroDesconhecido.message
           : 'Não foi possível executar a consulta.',
       );
+    } finally {
+      setExecutando(false);
     }
-  }
+  }, [executando, selecionado, sql]);
+
+  // Ctrl+Enter (ou Cmd+Enter) executa a consulta.
+  useEffect(() => {
+    const aoTeclar = (evento: KeyboardEvent) => {
+      if ((evento.ctrlKey || evento.metaKey) && evento.key === 'Enter') {
+        evento.preventDefault();
+        void executar();
+      }
+    };
+    window.addEventListener('keydown', aoTeclar);
+    return () => window.removeEventListener('keydown', aoTeclar);
+  }, [executar]);
 
   async function explicar() {
     if (!selecionado) return;
@@ -152,6 +191,16 @@ export function App() {
       setAba('cenario');
     } catch {
       setErro('Não foi possível carregar a solução de referência.');
+    }
+  }
+
+  async function copiarSql() {
+    try {
+      await navigator.clipboard.writeText(sql);
+      setCopiado(true);
+      setTimeout(() => setCopiado(false), 1800);
+    } catch {
+      setErro('O navegador não deixou copiar. Selecione o texto e copie à mão.');
     }
   }
 
@@ -221,6 +270,9 @@ export function App() {
                   </span>
                   <span className="cenario-titulo">{cenario.titulo}</span>
                   <span className="cenario-tecnica">{cenario.tecnica}</span>
+                  {cenario.tentativas > 0 ? (
+                    <span className="cenario-tentativas">{cenario.tentativas} tentativa(s)</span>
+                  ) : null}
                 </button>
               </li>
             ))}
@@ -267,9 +319,18 @@ export function App() {
               {aba === 'cenario' ? (
                 <>
                   <div className="editor">
-                    <label htmlFor="sql" className="rotulo-editor">
-                      Consulta SQL
-                    </label>
+                    <div className="editor-topo">
+                      <label htmlFor="sql" className="rotulo-editor">
+                        Consulta SQL
+                      </label>
+                      <button
+                        type="button"
+                        className="discreto pequeno"
+                        onClick={() => void copiarSql()}
+                      >
+                        {copiado ? 'Copiado' : 'Copiar SQL'}
+                      </button>
+                    </div>
                     <textarea
                       id="sql"
                       value={sql}
@@ -279,11 +340,17 @@ export function App() {
                       aria-describedby="ajuda-editor"
                     />
                     <p id="ajuda-editor" className="suave">
-                      A consulta roda em uma transação somente leitura. Você pode editar livremente.
+                      A consulta roda em uma transação somente leitura, com tempo limite.{' '}
+                      <kbd>Ctrl</kbd> + <kbd>Enter</kbd> executa.
                     </p>
                     <div className="acoes">
-                      <button type="button" className="primario" onClick={() => void executar()}>
-                        Executar
+                      <button
+                        type="button"
+                        className="primario"
+                        onClick={() => void executar()}
+                        disabled={executando}
+                      >
+                        {executando ? 'Executando…' : 'Executar'}
                       </button>
                       <button type="button" onClick={() => void explicar()}>
                         Ver plano de execução
@@ -295,10 +362,18 @@ export function App() {
                   </div>
 
                   {feedback ? (
-                    <p className={feedback.acertou ? 'retorno ok' : 'retorno ruim'} role="status">
-                      {feedback.acertou ? '✓ ' : '→ '}
-                      {feedback.texto}
-                    </p>
+                    <div className={feedback.acertou ? 'retorno ok' : 'retorno ruim'} role="status">
+                      <p className="retorno-titulo">
+                        {feedback.acertou ? '✓ Diagnóstico correto' : '→ Ainda não é o diagnóstico'}
+                      </p>
+                      <p>{feedback.texto}</p>
+                      {!feedback.acertou ? (
+                        <p className="retorno-detalhe">
+                          A referência devolve {feedback.linhasEsperadas} linha(s); a sua consulta
+                          devolveu {feedback.linhasObtidas}.
+                        </p>
+                      ) : null}
+                    </div>
                   ) : null}
 
                   {resultado?.erro ? (
@@ -311,32 +386,41 @@ export function App() {
                     <div className="resultado">
                       <p className="suave">
                         {resultado.totalLinhas} linha(s) em {resultado.duracaoMs} ms
-                        {resultado.truncado ? ' · resultado truncado' : ''}
                       </p>
-                      <div className="tabela-scroll">
-                        <table>
-                          <thead>
-                            <tr>
-                              {resultado.colunas.map((coluna) => (
-                                <th key={coluna} scope="col">
-                                  {coluna}
-                                </th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {resultado.linhas.map((linha, indice) => (
-                              <tr key={indice}>
-                                {linha.map((celula, indiceCelula) => (
-                                  <td key={indiceCelula}>
-                                    {celula === null ? '—' : String(celula)}
-                                  </td>
+                      {resultado.truncado ? (
+                        <p className="aviso-truncamento" role="status">
+                          Resultado truncado em 200 linhas. A consulta traz mais dados; use um
+                          filtro para ver o resto.
+                        </p>
+                      ) : null}
+                      {resultado.colunas.length ? (
+                        <div className="tabela-scroll">
+                          <table>
+                            <thead>
+                              <tr>
+                                {resultado.colunas.map((coluna) => (
+                                  <th key={coluna} scope="col">
+                                    {coluna}
+                                  </th>
                                 ))}
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                            </thead>
+                            <tbody>
+                              {resultado.linhas.map((linha, indice) => (
+                                <tr key={indice}>
+                                  {linha.map((celula, indiceCelula) => (
+                                    <td key={indiceCelula}>
+                                      {celula === null ? '—' : String(celula)}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <p className="suave">A consulta rodou e não devolveu nenhuma coluna.</p>
+                      )}
                     </div>
                   ) : null}
 
@@ -394,6 +478,18 @@ export function App() {
                   </ul>
                 </div>
               )}
+
+              <div className="rodape-esquema">
+                <button
+                  type="button"
+                  className="discreto"
+                  onClick={() => setEsquemaAberto((v) => !v)}
+                  aria-expanded={esquemaAberto}
+                >
+                  {esquemaAberto ? 'Esconder o esquema do ERP' : 'Ver o esquema do ERP'}
+                </button>
+                {esquemaAberto ? <ExploradorEsquema tabelas={esquema} /> : null}
+              </div>
             </>
           )}
         </section>
@@ -408,7 +504,8 @@ export function App() {
           </p>
           <p className="suave">
             O conteúdo do banco é de um ERP de vendas e distribuição: cliente, pedido, produto,
-            pagamento, estoque e chamado.
+            pagamento, estoque e chamado. As consultas rodam em uma transação somente leitura, com o
+            usuário do banco restringido a SELECT.
           </p>
         </div>
       </footer>

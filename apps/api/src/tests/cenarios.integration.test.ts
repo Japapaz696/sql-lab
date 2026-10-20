@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 
+import { poolAdmin } from '../database/pool.js';
 import { prepararBanco } from '../database/setup.js';
 import { cenarios } from '../scenarios/index.js';
 import { executarConsulta } from '../services/sql.service.js';
@@ -11,17 +12,20 @@ import { compararResultados } from '../services/scenarios.service.js';
  * `DATABASE_URL` para `TEST_DATABASE_URL` antes de qualquer import, e o
  * `global-setup.ts` recria o esquema e a carga antes dos testes.
  *
- * Este `beforeAll` só existe para garantir o estado dentro do próprio
- * arquivo — a carga é idempotente, então rodá-la de novo não muda nada.
+ * As consultas da suíte usam a conexão de **execução** — a mesma da
+ * aplicação, sem permissão de escrita. As conferências diretas no banco usam a
+ * conexão administrativa.
  */
 let pool: pg.Pool;
 
 beforeAll(async () => {
-  pool = new pg.Pool({
-    connectionString: process.env.TEST_DATABASE_URL,
-    max: 5,
-    connectionTimeoutMillis: 10_000,
-  });
+  pool =
+    poolAdmin ??
+    new pg.Pool({
+      connectionString: process.env.DATABASE_ADMIN_URL ?? process.env.TEST_DATABASE_URL,
+      max: 5,
+      connectionTimeoutMillis: 10_000,
+    });
   await prepararBanco(pool);
 }, 60_000);
 

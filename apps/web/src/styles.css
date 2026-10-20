@@ -538,3 +538,193 @@ tbody tr:hover {
 .rodape p {
   max-width: 72ch;
 }
+
+/* ---------- retorno da verificação ---------- */
+
+.retorno-titulo {
+  font-weight: 650;
+  margin: 0 0 0.35rem;
+}
+
+.retorno-detalhe {
+  margin: 0.4rem 0 0;
+  font-size: 0.88rem;
+  opacity: 0.85;
+  font-family: var(--mono);
+}
+
+.aviso-truncamento {
+  background: var(--aviso-suave);
+  border: 1px solid #6b551a;
+  color: var(--aviso);
+  border-radius: var(--raio);
+  padding: 0.6rem 0.85rem;
+  font-size: 0.9rem;
+  margin: 0 0 0.75rem;
+}
+
+/* ---------- editor ---------- */
+
+.editor-topo {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+button.pequeno {
+  font-size: 0.85rem;
+  padding: 0.2rem 0.5rem;
+}
+
+kbd {
+  font-family: var(--mono);
+  font-size: 0.78em;
+  background: var(--superficie-2);
+  border: 1px solid var(--borda-forte);
+  border-bottom-width: 2px;
+  border-radius: 0.3rem;
+  padding: 0.05em 0.35em;
+  color: var(--texto-suave);
+}
+
+.cenario-tentativas {
+  font-size: 0.75rem;
+  color: var(--texto-fraco);
+  font-family: var(--mono);
+  margin-top: 0.15rem;
+}
+
+/* ---------- explorador do esquema ---------- */
+
+.rodape-esquema {
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--borda);
+}
+
+.esquema {
+  margin-top: 1rem;
+}
+
+.esquema h3 {
+  margin-top: 0;
+}
+
+.lista-tabelas {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  gap: 0.5rem;
+}
+
+.tabela-do-esquema,
+.tabela do-esquema {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--superficie);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio);
+  padding: 0.5rem 0.7rem;
+  cursor: pointer;
+  font: inherit;
+  color: var(--texto);
+  text-align: left;
+}
+
+.tabela do-esquema:hover {
+  border-color: var(--borda-forte);
+  background: var(--superficie-2);
+}
+
+.tabela do-esquema.expandida {
+  border-color: var(--acento);
+  background: var(--superficie-2);
+}
+
+.nome-tabela {
+  font-family: var(--mono);
+  font-size: 0.88rem;
+}
+
+.contagem-tabela {
+  font-size: 0.75rem;
+  color: var(--texto-fraco);
+  white-space: nowrap;
+}
+
+.detalhe-tabela {
+  grid-column: 1 / -1;
+  border: 1px solid var(--borda);
+  border-radius: var(--raio);
+  padding: 0.75rem;
+  background: var(--fundo);
+  margin-top: -0.25rem;
+}
+
+.tabela-colunas {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.tabela-colunas th,
+.tabela-colunas td {
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--borda);
+  white-space: normal;
+}
+
+.tabela-colunas th {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--texto-fraco);
+  font-weight: 600;
+}
+
+.tabela-colunas td {
+  font-family: var(--mono);
+}
+
+.tabela-colunas .tipo-coluna {
+  color: var(--texto-suave);
+}
+
+.opcional {
+  color: var(--texto-fraco);
+  font-style: italic;
+}
+
+.etiqueta {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  border-radius: 0.25rem;
+  padding: 0.05rem 0.3rem;
+  margin-right: 0.25rem;
+}
+
+.etiqueta.pk {
+  background: rgb(63 185 80 / 18%);
+  color: var(--acento);
+}
+
+.etiqueta.fk {
+  background: rgb(210 153 34 / 18%);
+  color: var(--aviso);
+}
+
+.relacionamentos {
+  margin: 0.75rem 0 0;
+  font-size: 0.82rem;
+  color: var(--texto-suave);
+  font-family: var(--mono);
+}

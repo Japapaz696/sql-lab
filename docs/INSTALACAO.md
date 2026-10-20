@@ -35,12 +35,23 @@ Falta criar o banco de teste:
 docker exec -it sql-lab-postgres createdb -U sql_lab sql_lab_test
 ```
 
+O papel de execução (`sql_lab_exec`) é criado pelo `npm run db:reset`, na
+primeira vez — é o passo 4.
+
 ### Opção B — PostgreSQL local
 
 ```sql
+-- O dono do schema, que prepara o banco.
 CREATE ROLE sql_lab LOGIN PASSWORD 'sql_lab';
+-- O papel de execução: só leitura. É criado pelo db:reset, mas pode ser
+-- criado aqui se preferir.
+CREATE ROLE sql_lab_exec LOGIN PASSWORD 'sql_lab_exec';
+
 CREATE DATABASE sql_lab OWNER sql_lab;
 CREATE DATABASE sql_lab_test OWNER sql_lab;
+
+GRANT CONNECT ON DATABASE sql_lab TO sql_lab_exec;
+GRANT CONNECT ON DATABASE sql_lab_test TO sql_lab_exec;
 ```
 
 ### Opção C — Neon (gratuito)
@@ -79,15 +90,24 @@ O `.env` está no `.gitignore` e nunca deve ser versionado.
 npm run db:reset
 ```
 
-O comando recria o esquema (`db/schema.sql`) e a carga fictícia (`db/seed.sql`).
+O comando recria o esquema (`db/schema.sql`), a carga fictícia (`db/seed.sql`) e as
+concessões de privilégio (`db/privilegios.sql`), que criam o papel de execução
+com apenas `SELECT`.
+
 Saída esperada:
 
 ```
 Pronto: {"clientes":"6","produtos":"8","pedidos":"9","itens":"19",
          "pagamentos":"10","estoque":"8","chamados":"4"}
+Papel de execução: SELECT
 ```
 
 Rodar de novo produz exatamente o mesmo banco: a carga é determinística.
+
+> Se o usuário administrativo não puder criar papéis — o que acontece em
+> hospedagens gerenciadas, onde o dono não é superusuário — o comando avisa e
+> segue. O laboratório continua protegido pela transação somente leitura e pelo
+> protocolo estendido.
 
 ## 5. Rodar
 

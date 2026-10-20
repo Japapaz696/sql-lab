@@ -1,7 +1,6 @@
 import type {
   ExecuteResponse,
   ExplainResponse,
-  ProgressResponse,
   ScenarioDetail,
   ScenarioSummary,
 } from '@sql-lab/shared';
@@ -88,4 +87,22 @@ export async function buscarSolucao(id: string): Promise<{ sqlReferencia: string
   return requisitar(`/scenarios/${encodeURIComponent(id)}/solucao`);
 }
 
-export type { ProgressResponse };
+export type ColunaDoEsquema = {
+  nome: string;
+  tipo: string;
+  nulo: boolean;
+  padrao: string | null;
+};
+
+export type TabelaDoEsquema = {
+  nome: string;
+  colunas: ColunaDoEsquema[];
+  linhas: number;
+  chavePrimaria: string[];
+  relacionamentos: { coluna: string }[];
+};
+
+export async function buscarEsquema(): Promise<TabelaDoEsquema[]> {
+  const resposta = await requisitar<{ tabelas: TabelaDoEsquema[] }>('/scenarios/esquema/tabelas');
+  return resposta.tabelas;
+}

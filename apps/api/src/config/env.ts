@@ -21,7 +21,21 @@ if (!databaseUrl) {
 }
 
 export const env = {
+  /**
+   * Conexão usada para EXECUTAR as consultas do aluno.
+   *
+   * Deve apontar para o usuário sem privilégio de escrita (sql_lab_exec). Se
+   * apontar para o administrativo, a separação de privilégios não existe — a
+   * transação READ ONLY e o protocolo estendido continuam protegendo.
+   */
   databaseUrl,
+  /**
+   * Conexão usada só para preparar o banco (criar tabelas e aplicar a carga).
+   *
+   * Quando não está definida, usa a mesma de execução — o laboratório
+   * funciona, mas sem a separação de privilégios.
+   */
+  databaseAdminUrl: process.env.DATABASE_ADMIN_URL,
   testDatabaseUrl: process.env.TEST_DATABASE_URL ?? databaseUrl,
   port: inteiro('PORT', 3000),
   allowedOrigin: process.env.ALLOWED_ORIGIN ?? 'http://localhost:5173',

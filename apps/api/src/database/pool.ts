@@ -1,22 +1,31 @@
 import pg from 'pg';
+import Cursor from 'pg-cursor';
 
 import { env } from '../config/env.js';
 
 const { Pool } = pg;
 
 /**
- * Conexão da aplicação.
+ * Conexão de **consulta**: a que executa o SQL de quem usa a interface.
  *
- * `default_transaction_read_only` garante, no nível do servidor, que nenhuma
- * consulta do laboratório consiga escrever no banco — mesmo que a consulta
- * enviada pelo aluno peça um `UPDATE` ou um `DROP`. A proteção não depende de
- * a aplicação confiar no texto da consulta.
+ * `default_transaction_read_only` é a primeira camada de defesa, e fica no
+ * servidor: mesmo que a aplicação erre, o banco recusa a escrita.
+ *
+ * A segunda camada é o papel do banco: `sql_lab_exec` tem SELECT e nada
+ * mais. Se a aplicação apontar para um usuário sem esses privilégios, a
+ * escrita é recusada mesmo fora de uma transação somente leitura.
+ *
+ * Esta conexão **não** grava nada — nem o progresso do aluno. Quem grava é a
+ * conexão administrativa.
  */
 export const pool = new Pool({
   connectionString: env.databaseUrl,
   max: 10,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000,
+  // Rede de segurança no nível da conexão: mesmo que alguém abra uma
+  // transação de escrita à mão, o banco recusa.
+  options: '-c default_transaction_read_only=on -c statement_timeout=10000',
 });
 
 pool.on('error', (erro) => {
@@ -24,10 +33,41 @@ pool.on('error', (erro) => {
 });
 
 /**
- * Conexão de leitura, usada para executar as consultas do aluno.
+ * Conexão da aplicação: usa o usuário dono do esquema.
  *
- * A transação é aberta como READ ONLY e a instrução tem tempo limite, de modo
- * que uma consulta pesada não segure a conexão nem derrube o serviço.
+ * Serve para o que a **aplicação** precisa gravar — o progresso do aluno — e
+ * para preparar o banco. Nunca recebe o SQL de quem usa a interface.
+ */
+export const poolAdmin = env.databaseAdminUrl
+  ? new Pool({
+      connectionString: env.databaseAdminUrl,
+      max: 5,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
+    })
+  : null;
+
+poolAdmin?.on('error', (erro) => {
+  console.error('Erro de conexão administrativa:', erro.message);
+});
+
+/**
+ * Conexão usada para gravar o progresso.
+ *
+ * Se a conexão administrativa não estiver configurada, cai para a conexão
+ * comum — que pode ser somente leitura, e nesse caso o progresso simplesmente
+ * não é gravado, em vez de derrubar o laboratório.
+ */
+export function poolDeEscrita(): pg.Pool {
+  return poolAdmin ?? pool;
+}
+
+/**
+ * Executa uma operação dentro de uma transação somente leitura.
+ *
+ * A transação garante que nada é escrito. O tempo limite garante que uma
+ * consulta pesada não segure a conexão. E o `idle_in_transaction_session_timeout`
+ * impede que uma transação fique aberta sem ninguém.
  */
 export async function withReadOnlyClient<T>(
   operacao: (client: pg.PoolClient) => Promise<T>,
@@ -46,4 +86,71 @@ export async function withReadOnlyClient<T>(
   } finally {
     client.release();
   }
+}
+
+/**
+ * O cursor do pg-cursor guarda a descricao das colunas em um campo interno,
+ * depois da primeira leitura. O tipo publicado nao declara esse campo, entao
+ * o acesso passa por uma interface local, explicita sobre o que depende.
+ */
+type CursorComColunas = {
+  _result?: { fields?: { name: string }[] };
+};
+
+function colunasDoCursor(cursor: unknown): string[] {
+  const interno = cursor as CursorComColunas;
+  return (interno._result?.fields ?? []).map((campo) => campo.name);
+}
+
+/**
+ * Le um conjunto de resultados em lotes, parando no limite.
+ *
+ * E o que impede que a consulta traga um milhao de linhas para a memoria do
+ * processo: o cursor entrega as linhas aos poucos, e a leitura para assim que
+ * o limite e atingido. A consulta e abandonada no servidor.
+ *
+ * O cursor usa o protocolo estendido, que aceita **uma unica instrucao**. E
+ * o que impede que quem usa o laboratorio escreva `COMMIT; UPDATE ...` para
+ * encerrar a transacao somente leitura e escrever fora dela.
+ */
+export async function lerComLimite(
+  client: pg.PoolClient,
+  texto: string,
+  limite: number,
+): Promise<{ linhas: unknown[][]; colunas: string[]; truncado: boolean }> {
+  const cursor = client.query(new Cursor(texto, [], { rowMode: 'array' }));
+  const linhas: unknown[][] = [];
+  let truncado = false;
+  let colunas: string[] = [];
+
+  try {
+    for (;;) {
+      // Le um lote a mais que o limite: se vier algo, ha mais resultado.
+      const lote = await cursor.read(limite + 1);
+      if (lote === null || lote.length === 0) break;
+
+      // Depois da primeira leitura, o cursor sabe o nome das colunas.
+      if (colunas.length === 0) {
+        colunas = colunasDoCursor(cursor);
+      }
+
+      if (linhas.length + lote.length > limite) {
+        linhas.push(...lote.slice(0, limite - linhas.length));
+        truncado = true;
+        break;
+      }
+
+      linhas.push(...lote);
+      if (linhas.length >= limite) {
+        // Confere se ainda havia resultado depois do limite.
+        const resto = await cursor.read(1);
+        truncado = resto !== null && resto.length > 0;
+        break;
+      }
+    }
+  } finally {
+    await cursor.close().catch(() => undefined);
+  }
+
+  return { linhas, colunas, truncado };
 }

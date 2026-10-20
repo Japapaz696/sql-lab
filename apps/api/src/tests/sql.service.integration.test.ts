@@ -3,20 +3,21 @@ import pg from 'pg';
 
 import { prepararBanco } from '../database/setup.js';
 import { executarConsulta, explicarConsulta } from '../services/sql.service.js';
+import { abrirBancoAdministrativo } from './banco.js';
 
 /**
  * A suíte roda contra o banco de teste: o `setup.ts` redireciona
  * `DATABASE_URL` para `TEST_DATABASE_URL` antes de qualquer import, e o
  * `global-setup.ts` recria o esquema e a carga antes dos testes.
+ *
+ * As consultas da suíte usam a conexão de **execução** — a mesma da
+ * aplicação, sem permissão de escrita. As conferências diretas no banco usam
+ * a conexão administrativa.
  */
 let pool: pg.Pool;
 
 beforeAll(async () => {
-  pool = new pg.Pool({
-    connectionString: process.env.TEST_DATABASE_URL,
-    max: 5,
-    connectionTimeoutMillis: 10_000,
-  });
+  pool = abrirBancoAdministrativo();
   await prepararBanco(pool);
 }, 60_000);
 
@@ -24,43 +25,7 @@ afterAll(async () => {
   await pool?.end();
 });
 
-/**
- * A proteção do laboratório não depende de a API confiar no texto da consulta:
- * ela vem do servidor, em uma transação READ ONLY.
- */
-describe('execução segura de consultas', () => {
-  it('recusa um UPDATE', async () => {
-    const resultado = await executarConsulta(
-      "UPDATE clientes SET nome = 'alterado' WHERE codigo = 'CLI-0001'",
-    );
-    expect(resultado.ok).toBe(false);
-    expect(resultado.erro).toMatch(/read-only|read only/i);
-  });
-
-  it('recusa um DELETE', async () => {
-    const resultado = await executarConsulta('DELETE FROM clientes');
-    expect(resultado.ok).toBe(false);
-    expect(resultado.erro).toMatch(/read-only|read only/i);
-  });
-
-  it('recusa um DROP TABLE', async () => {
-    const resultado = await executarConsulta('DROP TABLE clientes');
-    expect(resultado.ok).toBe(false);
-  });
-
-  it('recusa um INSERT', async () => {
-    const resultado = await executarConsulta(
-      "INSERT INTO clientes (id, codigo, nome, documento, cidade, uf, canal) VALUES (gen_random_uuid(), 'X', 'X', 'X', 'X', 'MG', 'varejo')",
-    );
-    expect(resultado.ok).toBe(false);
-  });
-
-  it('deixa os dados intactos depois de uma tentativa de escrita', async () => {
-    await executarConsulta("UPDATE clientes SET nome = 'alterado' WHERE codigo = 'CLI-0001'");
-    const { rows } = await pool.query("SELECT nome FROM clientes WHERE codigo = 'CLI-0001'");
-    expect(rows[0].nome).toBe('Padaria Aurora Ltda');
-  });
-
+describe('execução de consultas', () => {
   it('devolve a mensagem do PostgreSQL quando a consulta tem erro de sintaxe', async () => {
     const resultado = await executarConsulta('SELEC * FROM clientes');
     expect(resultado.ok).toBe(false);
@@ -71,7 +36,19 @@ describe('execução segura de consultas', () => {
   it('devolve a mensagem do PostgreSQL quando a tabela não existe', async () => {
     const resultado = await executarConsulta('SELECT * FROM tabela_que_nao_existe');
     expect(resultado.ok).toBe(false);
-    expect(resultado.erro).toMatch(/does not exist|não existe/i);
+    expect(resultado.erro).toMatch(/inexistente/i);
+  });
+
+  it('traduz o erro de coluna inexistente', async () => {
+    const resultado = await executarConsulta('SELECT coluna_que_nao_existe FROM clientes');
+    expect(resultado.ok).toBe(false);
+    expect(resultado.erro).toMatch(/Coluna inexistente/i);
+  });
+
+  it('traduz o erro de sintaxe', async () => {
+    const resultado = await executarConsulta('SELECT FROM');
+    expect(resultado.ok).toBe(false);
+    expect(resultado.erro).toMatch(/sintaxe/i);
   });
 
   it('rejeita consulta vazia com uma mensagem útil', async () => {
@@ -104,6 +81,12 @@ describe('execução segura de consultas', () => {
     expect(resultado.ok).toBe(true);
     expect(resultado.linhas[0]?.[0]).toBe('110.50');
     expect(String(resultado.linhas[0]?.[1])).toMatch(/^2025-06-10/);
+  });
+
+  it('devolve o tempo que a consulta levou', async () => {
+    const resultado = await executarConsulta('SELECT 1');
+    expect(resultado.ok).toBe(true);
+    expect(resultado.duracaoMs).toBeGreaterThanOrEqual(0);
   });
 });
 

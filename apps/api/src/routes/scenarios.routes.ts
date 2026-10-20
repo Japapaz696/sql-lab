@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 
 import { buscarCenario } from '../scenarios/index.js';
+import { descreverEsquema } from '../services/schema.service.js';
 import { avaliarCenario, detalharCenario, listarCenarios } from '../services/scenarios.service.js';
 import { lerProgresso, registrarProgresso } from '../services/progress.service.js';
 import { executarConsulta, explicarConsulta } from '../services/sql.service.js';
@@ -42,6 +43,17 @@ scenariosRouter.get('/', async (request: Request, response: Response) => {
       resolvidos: cenarios.filter((cenario) => cenario.resolvido).length,
     },
   });
+});
+
+/**
+ * O esquema do ERP, lido do catalogo do PostgreSQL.
+ *
+ * Serve para o aluno saber o que existe antes de escrever a consulta.
+ *
+ * Fica antes das rotas com parametro, para nao haver ambiguidade.
+ */
+scenariosRouter.get('/esquema/tabelas', async (_request: Request, response: Response) => {
+  response.json({ tabelas: await descreverEsquema() });
 });
 
 scenariosRouter.get('/:id', async (request: Request, response: Response) => {
