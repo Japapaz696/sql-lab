@@ -177,19 +177,44 @@ psql "$DATABASE_ADMIN_URL" -c "SELECT count(*) FROM clientes"
 
 2. Configure:
 
-   | Campo             | Valor                                                                                           |
-   | ----------------- | ----------------------------------------------------------------------------------------------- |
-   | Root Directory    | _(vazio — a raiz do repositório)_                                                               |
-   | Runtime           | Node                                                                                            |
-   | Build Command     | `npm ci && npm run build --workspace=@sql-lab/shared && npm run build --workspace=@sql-lab/api` |
-   | Start Command     | `node apps/api/dist/index.js`                                                                   |
-   | Health Check Path | `/health`                                                                                       |
+   | Campo             | Valor                                                                                                         |
+   | ----------------- | ------------------------------------------------------------------------------------------------------------- |
+   | Root Directory    | _(vazio — a raiz do repositório)_                                                                             |
+   | Runtime           | Node                                                                                                          |
+   | Build Command     | `npm ci --include=dev && npm run build --workspace=@sql-lab/shared && npm run build --workspace=@sql-lab/api` |
+   | Start Command     | `node apps/api/dist/index.js`                                                                                 |
+   | Health Check Path | `/health`                                                                                                     |
 
    **Por que a raiz e não `apps/api`:** o repositório é um monorepo com
    workspaces npm, e a API usa o pacote compartilhado `@sql-lab/shared`. Com
    `apps/api` como raiz, o npm não enxerga o workspace e a instalação falha.
    Por isso o build compila o pacote compartilhado primeiro, e o start command
    sobe a API já compilada a partir da raiz.
+
+   **Por que `--include=dev`:** o Render define `NODE_ENV=production` já na
+   fase de build. Com essa variável, o npm **omite as devDependencies** — e é
+   de lá que vem tudo o que compila o projeto (`typescript`, `vite`,
+   `@vitejs/plugin-react`, `tsx`, `@types/*`). Sem a flag, o build morre com
+   `tsc: not found` antes de compilar qualquer linha. O `--include=dev` manda o
+   npm instalar as dependências de build mesmo com `NODE_ENV=production`.
+
+### Se o serviço já existe: corrija o Build Command
+
+O `render.yaml` vale para **criar** o serviço. Um serviço já criado no painel
+não muda sozinho — é preciso corrigir o campo à mão:
+
+> **Render → o serviço `sql-lab-api` → Settings → Build Command**
+>
+> ```
+> npm ci --include=dev && npm run build --workspace=@sql-lab/shared && npm run build --workspace=@sql-lab/api
+> ```
+
+Depois, **Save & Deploy**. Sem isso, o build continua falhando e o serviço não
+sobe — a URL pública fica sem responder.
+
+O CI confere esse detalhe a cada execução: ele repete a instalação do jeito do
+Render (`NODE_ENV=production`) e compila a API, de modo que a falha aparece no
+CI e não no deploy.
 
 3. Em **Environment**, defina:
 
@@ -221,15 +246,24 @@ psql "$DATABASE_ADMIN_URL" -c "SELECT count(*) FROM clientes"
 2. Rode o workflow **Publicar a interface no GitHub Pages** (aba **Actions**),
    preenchendo:
 
-   | Campo       | Valor                                                               |
-   | ----------- | ------------------------------------------------------------------- |
-   | `api_url`   | a URL da API no Render, sem barra final                             |
-   | `base_path` | em branco (o padrão é caminho relativo, que funciona em subcaminho) |
+   | Campo       | Valor                                              |
+   | ----------- | -------------------------------------------------- |
+   | `api_url`   | `https://sql-lab-api-7bdv.onrender.com` (o padrão) |
+   | `base_path` | `/sql-lab/` (o padrão)                             |
+
+   > `VITE_API_URL` aceita **a origem pura** (`https://api.exemplo.com`) ou a
+   > **base completa** (`https://api.exemplo.com/api/v1`). A interface
+   > acrescenta o caminho das rotas quando ele falta — assim não é possível
+   > publicar uma demonstração que dá 404 em toda requisição.
 
    O workflow monta a interface e publica. Como é manual, **nada é publicado
    sem alguém pedir**.
 
-3. A interface fica em `https://<usuario>.github.io/sql-lab/`.
+   Antes da primeira execução, o workflow confere a montagem: os arquivos
+   precisam apontar para o caminho base, a URL da API precisa estar no
+   bundle, e o bundle não pode conter string de conexão com credencial.
+
+3. A interface fica em `https://japapaz696.github.io/sql-lab/`.
 
 ### Opção B — Cloudflare Pages
 
@@ -237,12 +271,12 @@ psql "$DATABASE_ADMIN_URL" -c "SELECT count(*) FROM clientes"
    **Pages** → conecte o repositório `Japapaz696/sql-lab`.
 2. Configure:
 
-   | Campo            | Valor                                                                                                |
-   | ---------------- | ---------------------------------------------------------------------------------------------------- |
-   | Build command    | `npm install && npm run build --workspace=@sql-lab/shared && npm run build --workspace=@sql-lab/web` |
-   | Output directory | `apps/web/dist`                                                                                      |
-   | Root directory   | _(deixar vazio)_                                                                                     |
-   | Node version     | `20`                                                                                                 |
+   | Campo            | Valor                                                                                                         |
+   | ---------------- | ------------------------------------------------------------------------------------------------------------- |
+   | Build command    | `npm ci --include=dev && npm run build --workspace=@sql-lab/shared && npm run build --workspace=@sql-lab/web` |
+   | Output directory | `apps/web/dist`                                                                                               |
+   | Root directory   | _(deixar vazio)_                                                                                              |
+   | Node version     | `20`                                                                                                          |
 
 3. Em **Settings → Environment variables**, defina:
 
@@ -252,21 +286,28 @@ psql "$DATABASE_ADMIN_URL" -c "SELECT count(*) FROM clientes"
 
 > `VITE_API_URL` é lido **na hora do build**. Mudar a variável exige
 > republicar a interface.
+>
+> O mesmo `--include=dev` do Render vale aqui: com `NODE_ENV=production` no
+> ambiente de build, o npm omite o Vite e o TypeScript, e a interface não é
+> montada.
 
 ## Passo 5 — Conferir
 
 ```bash
 # a API responde
-curl https://SUA-API.onrender.com/health
+curl https://sql-lab-api-7bdv.onrender.com/health
 # {"status":"ok"}
 
 # a API está com o banco ao alcance
-curl https://SUA-API.onrender.com/ready
+curl https://sql-lab-api-7bdv.onrender.com/ready
 # {"status":"ok","banco":"ok"}
 
 # a interface abre
-curl -I https://SUA-INTERFACE.pages.dev/sql-lab/
+curl -I https://japapaz696.github.io/sql-lab/
 ```
+
+O `curl` na URL da API pode demorar até um minuto na **primeira** chamada: é o
+serviço do plano gratuito acordando. As chamadas seguintes respondem na hora.
 
 E, na interface:
 
@@ -279,14 +320,17 @@ E, na interface:
 
 ## Problemas que aparecem no caminho
 
-| Sintoma                                              | Causa provável                                    | O que fazer                                                          |
-| ---------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------- |
-| A API sobe e cai na hora                             | `DATABASE_URL` apontando para o dono do schema    | a separação não está de pé; o log diz qual das duas condições falhou |
-| `permission denied for table clientes`               | o papel `sql_lab_exec` não tem `SELECT` na tabela | rode `npm run db:reset` de novo com a senha certa                    |
-| `database "sql_lab_demo" does not exist`             | a string do Neon aponta para outro banco          | confira o nome do banco na string de conexão                         |
-| A interface carrega, mas a lista de cenários não vem | `VITE_API_URL` não foi embutida no build          | republique a interface com a URL correta                             |
-| O navegador reclama de CORS                          | `ALLOWED_ORIGIN` não bate com a URL da interface  | ajuste a variável da API e reinicie o serviço                        |
-| A primeira clique demora um minuto                   | o plano gratuito hiberna                          | é o comportamento esperado; a interface repete a requisição sozinha  |
+| Sintoma                                              | Causa provável                                         | O que fazer                                                          |
+| ---------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------- |
+| A URL da API fica sem responder                      | o build do Render falhou                               | corrija o Build Command (Passo 3) e faça Save & Deploy               |
+| O log do build diz `tsc: not found`                  | `npm ci` sem `--include=dev` com `NODE_ENV=production` | acrescente `--include=dev` ao Build Command                          |
+| A API sobe e cai na hora                             | `DATABASE_URL` apontando para o dono do schema         | a separação não está de pé; o log diz qual das duas condições falhou |
+| `permission denied for table clientes`               | o papel `sql_lab_exec` não tem `SELECT` na tabela      | rode `npm run db:reset` de novo com a senha certa                    |
+| `database "sql_lab_demo" does not exist`             | a string do Neon aponta para outro banco               | confira o nome do banco na string de conexão                         |
+| A interface carrega, mas a lista de cenários não vem | `VITE_API_URL` não foi embutida no build               | republique a interface com a URL correta                             |
+| A interface carrega e a lista vem, mas dá 404        | `VITE_API_URL` sem o caminho das rotas                 | a interface acrescenta `/api/v1`; confira a URL embutida             |
+| O navegador reclama de CORS                          | `ALLOWED_ORIGIN` não bate com a URL da interface       | ajuste a variável da API e reinicie o serviço                        |
+| A primeira clique demora um minuto                   | o plano gratuito hiberna                               | é o comportamento esperado; a interface repete a requisição sozinha  |
 
 ## O que vai para o ar
 

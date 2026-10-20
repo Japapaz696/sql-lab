@@ -152,13 +152,13 @@ npm run dev
 npm test
 ```
 
-**95 testes** em três suítes, contra um PostgreSQL de verdade:
+**108 testes** em três suítes, contra um PostgreSQL de verdade:
 
 | Suíte             | Testes | O que cobre                                                        |
 | ----------------- | ------ | ------------------------------------------------------------------ |
 | `packages/shared` | 3      | contrato das listas compartilhadas                                 |
 | `apps/api`        | 78     | carga, cenários, execução segura, privilégios, CORS e health check |
-| `apps/web`        | 14     | cliente da API e a sessão anônima                                  |
+| `apps/web`        | 27     | cliente da API, endereço da API e a interface renderizada          |
 
 A suíte da API recria o banco de teste do zero antes de rodar, para que o
 resultado de referência seja estável.
@@ -218,10 +218,33 @@ privilégios não tem senha literal nenhuma, e o valor chega por parâmetro.
 Detalhes, inclusive o que **não** está protegido, em
 [docs/SEGURANCA.md](docs/SEGURANCA.md).
 
-Para publicar a demonstração, a configuração recomendada — interface, API e banco,
-tudo em hospedagem gratuita — está em [docs/PUBLICACAO.md](docs/PUBLICACAO.md).
-O repositório já traz `render.yaml` com a configuração do serviço e um workflow
+## Publicação
+
+A demonstração é publicada em três partes, todas em hospedagem gratuita:
+
+| Parte     | Onde           | Observação                                                    |
+| --------- | -------------- | ------------------------------------------------------------- |
+| Interface | GitHub Pages   | o repositório de usuário é servido em `/<repositorio>/`       |
+| API       | Render (Hobby) | hiberna após 15 min sem tráfego; leva ~1 min para acordar     |
+| Banco     | Neon (Free)    | PostgreSQL 16, com dados fictícios e um usuário só de leitura |
+
+O caminho exato, campo a campo, está em [docs/PUBLICACAO.md](docs/PUBLICACAO.md).
+O repositório traz `render.yaml` com a configuração do serviço e um workflow
 manual para o GitHub Pages.
+
+Duas coisas que quebram a publicação, e que o CI confere a cada execução:
+
+- **o build de produção precisa das dependências de build.** O Render define
+  `NODE_ENV=production` já na fase de build, e com essa variável o npm omite
+  as `devDependencies` — que é de onde vem o TypeScript e o Vite. O comando
+  de build usa `npm ci --include=dev`;
+- **a URL da API precisa do caminho das rotas.** As rotas vivem sob `/api/v1`.
+  A interface aceita a origem pura (`https://api.exemplo.com`) ou a base
+  completa (`https://api.exemplo.com/api/v1`), e normaliza sozinha.
+
+O plano gratuito hiberna: a API leva cerca de um minuto para acordar depois de
+um tempo sem tráfego. A interface repete a requisição sozinha e explica o que
+está acontecendo.
 
 ## Arquitetura
 
