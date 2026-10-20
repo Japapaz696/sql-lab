@@ -115,11 +115,27 @@ GRANT ALL PRIVILEGES ON DATABASE sql_lab_test TO sql_lab;
 
 ```bash
 npm install
+```
+
+Antes, no `.env`, defina a senha do papel de execução e a confirmação:
+
+```bash
+SQL_LAB_EXEC_PASSWORD=uma-senha-forte-de-16-ou-mais
+SQL_LAB_CONFIRMAR_RESET=sim
+```
+
+Depois:
+
+```bash
 npm run db:reset
 ```
 
-O comando recria o esquema e a carga fictícia. A saída mostra quantos registros
-foram criados em cada tabela.
+O comando recria o esquema e a carga fictícia, e cria o papel de execução com
+apenas `SELECT`. A saída mostra quantos registros foram criados em cada tabela.
+
+Ele **recusa** rodar sem a confirmação, ou em um banco cujo nome não seja de
+laboratório — a preparação recria o schema inteiro, e num banco com dados de
+verdade isso apagaria tudo.
 
 ### Rodar
 
@@ -136,13 +152,13 @@ npm run dev
 npm test
 ```
 
-**70 testes** em três suítes, contra um PostgreSQL de verdade:
+**95 testes** em três suítes, contra um PostgreSQL de verdade:
 
-| Suíte             | Testes | O que cobre                                                               |
-| ----------------- | ------ | ------------------------------------------------------------------------- |
-| `packages/shared` | 3      | contrato das listas compartilhadas                                        |
-| `apps/api`        | 53     | carga fictícia, os 10 cenários, a execução segura e a separação de papéis |
-| `apps/web`        | 10     | cliente da API e a sessão anônima                                         |
+| Suíte             | Testes | O que cobre                                                        |
+| ----------------- | ------ | ------------------------------------------------------------------ |
+| `packages/shared` | 3      | contrato das listas compartilhadas                                 |
+| `apps/api`        | 78     | carga, cenários, execução segura, privilégios, CORS e health check |
+| `apps/web`        | 14     | cliente da API e a sessão anônima                                  |
 
 A suíte da API recria o banco de teste do zero antes de rodar, para que o
 resultado de referência seja estável.
@@ -171,13 +187,14 @@ npm run validate   # formatação, lint, tipos, build e as três suítes
 ## Segurança da execução de SQL
 
 O laboratório executa SQL escrito por quem usa a interface. A proteção tem
-**três camadas, todas no servidor**:
+**quatro camadas, todas no servidor**:
 
 | #   | Camada                           | O que impede                                                                        |
 | --- | -------------------------------- | ----------------------------------------------------------------------------------- |
 | 1   | **Protocolo estendido** (cursor) | Várias instruções na mesma consulta. `COMMIT; UPDATE ...` é recusado antes de rodar |
 | 2   | **Transação `READ ONLY`**        | Qualquer escrita dentro da transação                                                |
 | 3   | **Privilégio de banco**          | Qualquer escrita, mesmo fora de transação: o usuário de execução só tem `SELECT`    |
+| 4   | **Verificação de partida**       | A API não sobe em produção sem a separação de privilégios no lugar                  |
 
 Um bug real da camada 1 valeu registro: na primeira versão, um `COMMIT` no
 meio da consulta **encerrava a transação somente leitura** e a instrução
@@ -191,15 +208,20 @@ limite — **200 linhas e 0 MB**, contra 50.006 linhas e 6 MB antes.
 O papel do banco é separado:
 
 ```
-sql_lab_admin  dono do schema, usado só para preparar o banco
-sql_lab_exec   o papel que executa as consultas: SELECT e nada mais
+<dono do schema>  dono do schema: prepara o banco e grava o progresso
+sql_lab_exec       o papel que executa as consultas: SELECT e nada mais
 ```
+
+E a senha do papel de execução **não está no repositório**: o script de
+privilégios não tem senha literal nenhuma, e o valor chega por parâmetro.
 
 Detalhes, inclusive o que **não** está protegido, em
 [docs/SEGURANCA.md](docs/SEGURANCA.md).
 
 Para publicar a demonstração, a configuração recomendada — interface, API e banco,
 tudo em hospedagem gratuita — está em [docs/PUBLICACAO.md](docs/PUBLICACAO.md).
+O repositório já traz `render.yaml` com a configuração do serviço e um workflow
+manual para o GitHub Pages.
 
 ## Arquitetura
 
@@ -218,9 +240,12 @@ sql-lab/
 │   └── web/          interface React + Vite
 ├── packages/shared/  tipos compartilhados entre a API e a interface
 ├── db/
-│   ├── schema.sql    esquema do ERP, com constraints e índices
-│   └── seed.sql      carga fictícia determinística
-└── docs/             instalação, arquitetura e decisões
+│   ├── schema.sql      esquema do ERP, com constraints e índices
+│   ├── seed.sql        carga fictícia determinística
+│   └── privilegios.sql o papel de execução, sem senha no repositório
+├── docs/             instalação, publicação, segurança e decisões
+├── render.yaml        configuração do serviço no Render
+└── .github/workflows/ CI e publicação manual no GitHub Pages
 ```
 
 ### Decisões que valem explicar
@@ -240,6 +265,12 @@ identificador não é derivado de nada que identifique a pessoa.
 **A carga é SQL puro.** `db/seed.sql` é um arquivo de texto executado pelo
 PostgreSQL. Isso torna a carga determinística, revisável e utilizável como
 material de estudo.
+
+**A API prefere ficar fora do ar a rodar errada.** Em produção, a verificação
+de partida confere, contra o próprio banco, que o usuário de execução não pode
+escrever e que ele é diferente do administrativo. Se algo estiver errado, a API
+recusa subir e diz o que corrigir. Ficar fora do ar por um minuto é melhor do
+que aceitar SQL de terceiros com um usuário que escreve no banco.
 
 ## Tecnologias
 

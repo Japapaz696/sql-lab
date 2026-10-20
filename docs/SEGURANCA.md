@@ -32,9 +32,10 @@ cursor, que usa o protocolo estendido e aceita uma única instrução.
 ### Camada 3 — a separação de privilégios
 
 ```
-sql_lab_admin  dono do schema. Usado só para preparar o banco.
-sql_lab_exec   o papel que executa as consultas. Tem SELECT e nada mais:
-               sem INSERT, UPDATE, DELETE, TRUNCATE, CREATE, GRANT.
+<dono do schema>  dono do schema. Usado só para preparar o banco e para
+                   gravar o progresso da aplicação.
+sql_lab_exec       o papel que executa as consultas. Tem SELECT e nada mais:
+                   sem INSERT, UPDATE, DELETE, TRUNCATE, CREATE, GRANT.
 ```
 
 A conexão da aplicação é dividida em duas:
@@ -50,6 +51,66 @@ conexão de consulta não grava nada — nem o progresso.
 Se o usuário administrativo não puder criar papéis (em hospedagens
 gerenciadas, onde o dono não é superusuário), o script avisa e segue: as camadas
 1 e 2 continuam valendo.
+
+### A camada 4 — a configuração errada não passa
+
+As três camadas protegem contra **SQL malicioso**. A quarta protege contra
+**configuração errada**: a variável trocada, o papel não criado, a string do
+dono do schema colocada no lugar da do aluno.
+
+Em produção, a API **não sobe** sem a separação de privilégios. A verificação
+roda na partida, contra o próprio banco, e confere três coisas:
+
+| O que é conferido                       | Como                                                                         |
+| --------------------------------------- | ---------------------------------------------------------------------------- |
+| os dois usuários são diferentes         | comparando o usuário das duas URLs                                           |
+| o usuário de execução não pode escrever | `has_table_privilege`, que já conta os privilégios herdados por _membership_ |
+| o usuário de execução enxerga o banco   | uma contagem na tabela `clientes`                                            |
+
+> **Por que não testar com um `UPDATE` de mentira:** dentro de uma transação
+> somente leitura, o PostgreSQL acusa a transação **antes** de olhar o
+> privilégio da tabela. O erro seria `cannot execute UPDATE in a read-only
+transaction` nos dois casos — com e sem permissão — e a verificação não
+> distinguiria nada. O catálogo não tem essa ambiguidade.
+
+Em desenvolvimento, a mesma verificação roda, mas a ausência é um **aviso**: é
+assim que o laboratório roda numa máquina com um usuário só.
+
+### A senha do papel não está no repositório
+
+O script `db/privilegios.sql` não tem senha nenhuma. O valor chega por
+parâmetro, com `set_config`, e é aplicado com `format('%L')` — o que escapa a
+string corretamente, sem concatenar nada no texto do SQL.
+
+```sql
+-- Em db/privilegios.sql: nenhuma senha literal.
+senha text := current_setting('sql_lab.exec_password', true);
+...
+EXECUTE format('CREATE ROLE %I WITH LOGIN PASSWORD %L', papel, senha);
+```
+
+Se a senha não chegar, o script **falha** — em vez de criar o papel com um
+valor previsível.
+
+O CI confere, a cada execução, que nenhuma string de conexão com senha está
+versionada no repositório.
+
+### O `db:reset` não pode destruir um banco de verdade
+
+A preparação recria o schema inteiro (`DROP SCHEMA public CASCADE`). O comando
+recusa, antes de tocar em qualquer coisa, quando:
+
+- a confirmação `SQL_LAB_CONFIRMAR_RESET=sim` não está presente;
+- o nome do banco não é de laboratório (`sql_lab`, `sql_lab_test`, `sql_lab_demo`);
+- a senha do papel de execução não está definida, é curta demais, ou é igual ao
+  nome do papel.
+
+### O CORS é restrito
+
+A interface publicada fica em outro domínio que a API, então o navegador pide
+autorização. `ALLOWED_ORIGIN` lista as origens liberadas — e só elas recebem o
+cabeçalho de autorização. Uma origem que não está na lista não recebe nada, e
+o navegador bloqueia a resposta.
 
 ## O limite de linhas é real
 
@@ -73,9 +134,14 @@ avisa que o resultado foi truncado.
 | ------------------------- | ------------ | ------------------------------------- |
 | Tempo por consulta        | 5 s (padrão) | `statement_timeout`                   |
 | Tempo de transação ociosa | 5 s          | `idle_in_transaction_session_timeout` |
-| Tempo de conexão          | 10 s         | pool do `pg`                          |
+| Tempo de conexão          | 30 s         | pool do `pg`                          |
 | Linhas por resultado      | 200          | cursor                                |
-| Conexões simultâneas      | 10           | pool                                  |
+| Conexões simultâneas      | 5 (+3 admin) | pool                                  |
+
+O tempo de conexão é de 30 segundos porque o banco hiberna: num plano
+gratuito, o primeiro acesso depois de um tempo sem tráfego passa por uma
+partida a frio. Com 10 segundos, a API responderia "não consegui falar com o
+banco" logo depois de acordar.
 
 O `EXPLAIN` também passa pelo cursor: ele mostra o plano sem executar a
 consulta, e várias instruções juntas continuam sendo recusadas.
@@ -142,11 +208,34 @@ real está na tabela de clientes.
 - o tempo limite;
 - o `EXPLAIN`, conferindo que não executa a consulta que explica.
 
+`apps/api/src/tests/privilegios.integration.test.ts` — a camada 3 e a 4:
+
+- o usuário de execução **não tem** permissão de escrita, e o administrativo
+  **tem** — os dois lados, para que o teste não seja vazio;
+- a escrita é recusada por **privilégio** numa conexão crua, sem transação
+  somente leitura: a terceira camada funcionando sozinha;
+- a verificação de partida passa com a separação no lugar;
+- a comparação de usuários detecta o mesmo usuário em ambas as conexões, e a
+  ausência da conexão administrativa;
+- a consulta do aluno **não depende** da conexão administrativa: com ela
+  quebrada, a consulta continua rodando.
+
+`apps/api/src/tests/preparacao.integration.test.ts` — as guardas do `db:reset`:
+nome de banco, confirmação, senha presente, senha forte, senha diferente do
+nome do papel. E que o script de privilégios não tem senha literal.
+
+`apps/api/src/tests/infra.integration.test.ts` — a API na internet: health check
+sem tocar o banco, readiness com o estado do banco, CORS liberando as origens
+declaradas e recusando as outras.
+
+O CI, além da suíte, confere que **a API montada sobe em produção** com as
+duas conexões separadas — e que **recusa subir** quando elas não estão.
+
 ## Publicação
 
 O laboratório **não deve ser publicado com um banco que contenha dados reais**.
-A configuração de referência — API no Render, interface na Vercel, banco no
-Neon — está em [INSTALACAO.md](INSTALACAO.md).
+A configuração de referência — API no Render, interface no GitHub Pages, banco
+no Neon — está em [PUBLICACAO.md](PUBLICACAO.md), campo a campo.
 
 Antes de publicar para terceiros:
 
