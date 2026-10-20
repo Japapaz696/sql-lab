@@ -30,15 +30,21 @@ describe('separação de privilégios', () => {
 
   describe('comparação dos usuários', () => {
     it('lê o usuário de uma URL de conexão', () => {
-      expect(usuarioDaUrl('postgresql://fulano:senha@host:5432/banco')).toBe('fulano');
-      expect(usuarioDaUrl('postgresql://fulano%40x:senha@host:5432/banco')).toBe('fulano@x');
+      // As URLs de exemplo não têm senha: o CI varre o repositório atrás de
+      // string de conexão com senha, e um exemplo com senha seria um falso
+      // positivo — ou, pior, um lugar onde alguém deixaria um segredo.
+      const simples = 'postgresql://fulano@host:5432/banco';
+      const comArroba = 'postgresql://fulano%40x@host:5432/banco';
+
+      expect(usuarioDaUrl(simples)).toBe('fulano');
+      expect(usuarioDaUrl(comArroba)).toBe('fulano@x');
       expect(usuarioDaUrl('não é uma url')).toBeNull();
     });
 
     it('recusa quando as duas conexões usam o mesmo usuário', () => {
       const resultado = compararUsuarios(
-        'postgresql://mesmo:senha@host:5432/banco',
-        'postgresql://mesmo:outra@host:5432/banco',
+        'postgresql://mesmo@host:5432/banco',
+        'postgresql://mesmo@outro-host:5432/banco',
       );
 
       expect(resultado.diferentes).toBe(false);
@@ -46,7 +52,7 @@ describe('separação de privilégios', () => {
     });
 
     it('recusa quando não há conexão administrativa', () => {
-      const resultado = compararUsuarios('postgresql://alguem:senha@host:5432/banco', undefined);
+      const resultado = compararUsuarios('postgresql://alguem@host:5432/banco', undefined);
 
       expect(resultado.diferentes).toBe(false);
       expect(resultado.detalhe).toMatch(/DATABASE_ADMIN_URL/);
@@ -54,8 +60,8 @@ describe('separação de privilégios', () => {
 
     it('aceita quando os usuários são diferentes', () => {
       const resultado = compararUsuarios(
-        'postgresql://execucao:senha@host:5432/banco',
-        'postgresql://admin:senha@host:5432/banco',
+        'postgresql://execucao@host:5432/banco',
+        'postgresql://admin@host:5432/banco',
       );
 
       expect(resultado.diferentes).toBe(true);
