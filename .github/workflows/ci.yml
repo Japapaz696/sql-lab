@@ -128,5 +128,76 @@ jobs:
           fi
           echo "ok: o papel de execucao so tem SELECT"
 
+      # A API montada precisa subir de verdade, em modo de produção, com as
+      # duas conexões separadas. É exatamente o que o Render vai rodar.
+      - name: Conferir que a API montada sobe em producao
+        env:
+          NODE_ENV: production
+          DATABASE_URL: postgresql://sql_lab_exec:senha-ci-efemera-do-sql-lab@localhost:5432/sql_lab_test
+          DATABASE_ADMIN_URL: postgresql://sql_lab:sql_lab@localhost:5432/sql_lab_test
+        run: |
+          node apps/api/dist/index.js > /tmp/api.txt 2>&1 &
+          PID=$!
+          for tentativa in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:3000/health > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          echo "--- health"
+          curl -sf http://127.0.0.1:3000/health
+          echo "--- ready"
+          curl -sf http://127.0.0.1:3000/ready
+          kill $PID 2>/dev/null || true
+          wait $PID 2>/dev/null || true
+          if ! grep -q 'SQL Lab API em' /tmp/api.txt; then
+            echo "ERRO: a API nao subiu."
+            cat /tmp/api.txt
+            exit 1
+          fi
+          echo "ok: a API montada sobe em producao"
+
+      # E precisa recusar subir quando a separação não está de pé: é a
+      # garantia de que um erro de configuração não vira um laboratório
+      # rodando com um usuário que escreve no banco.
+      - name: Conferir que a API recusa subir sem separacao de privilegios
+        env:
+          NODE_ENV: production
+          DATABASE_URL: postgresql://sql_lab:sql_lab@localhost:5432/sql_lab_test
+          DATABASE_ADMIN_URL: postgresql://sql_lab:sql_lab@localhost:5432/sql_lab_test
+        run: |
+          set +e
+          timeout 30 node apps/api/dist/index.js > /tmp/api-sem-separacao.txt 2>&1
+          codigo=$?
+          set -e
+          if [ "$codigo" != "1" ]; then
+            echo "ERRO: a API nao recusou subir (codigo de saida $codigo)."
+            cat /tmp/api-sem-separacao.txt
+            exit 1
+          fi
+          if ! grep -q "separação de privilégios" /tmp/api-sem-separacao.txt; then
+            echo "ERRO: a API recusou subir sem explicar o motivo."
+            cat /tmp/api-sem-separacao.txt
+            exit 1
+          fi
+          echo "ok: a API recusa subir sem a separacao de privilegios"
+
+      # A interface precisa ser montada com caminho relativo, para funcionar
+      # tanto na raiz quanto num subcaminho (como o GitHub Pages).
+      - name: Conferir a montagem da interface
+        env:
+          VITE_API_URL: https://api.exemplo.invalid
+        run: |
+          npm run build --workspace=@sql-lab/web
+          test -f apps/web/dist/index.html || { echo "ERRO: a interface nao foi montada."; exit 1; }
+          if grep -q 'src="/assets/' apps/web/dist/index.html; then
+            echo "ERRO: a interface usa caminho absoluto e nao funciona em subcaminho."
+            exit 1
+          fi
+          if ! grep -q 'https://api.exemplo.invalid' apps/web/dist/assets/*.js; then
+            echo "ERRO: a URL da API nao entrou no bundle da interface."
+            exit 1
+          fi
+          echo "ok: a interface foi montada com caminho relativo"
       - name: Conferir as dependencias de producao
         run: npm audit --omit=dev --audit-level=high
