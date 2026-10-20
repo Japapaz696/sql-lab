@@ -5,7 +5,14 @@ import type {
   ScenarioSummary,
 } from '@sql-lab/shared';
 
-const API = '/api/v1';
+/**
+ * Endereço da API.
+ *
+ * Em desenvolvimento, a interface e a API são servidas pelo mesmo host, e o
+ * proxy do Vite encaminha `/api` para o backend. Em publicação, a API pode
+ * estar em outro host: defina `VITE_API_URL` na hora do build.
+ */
+const API = (import.meta.env.VITE_API_URL ?? '/api/v1').replace(/\/$/, '');
 
 /**
  * Identificador da sessão de trabalho.
@@ -37,25 +44,80 @@ export class ErroDeApi extends Error {
   }
 }
 
+/**
+ * O hosting gratuito da API hiberna depois de um tempo sem tráfego e leva
+ * cerca de um minuto para acordar. Uma tentativa que falha por tempo
+ * esgotado não é um erro do usuário: é a API acordando.
+ *
+ * Nesses casos a requisição é repetida, com espera growing entre as
+ * tentativas, e o erro final explica o que está acontecendo.
+ */
+const TENTATIVAS = 3;
+const ESPERA_ENTRE_TENTATIVAS_MS = 4000;
+const LIMITE_DE_TEMPO_MS = 20_000;
+
+function esperar(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Distingue "a API não respondeu" de "a API respondeu com erro". */
+function semResposta(erro: unknown): boolean {
+  return (
+    erro instanceof TypeError ||
+    (erro instanceof Error && /fetch failed|network|timeout/i.test(erro.message))
+  );
+}
+
 async function requisitar<T>(caminho: string, opcoes: RequestInit = {}): Promise<T> {
   const headers = new Headers(opcoes.headers);
   headers.set('X-Sessao-Id', idDaSessao());
   if (opcoes.body !== undefined) headers.set('Content-Type', 'application/json');
 
-  const resposta = await fetch(`${API}${caminho}`, { ...opcoes, headers });
+  let ultimoErro: unknown = null;
 
-  if (!resposta.ok) {
-    let mensagem = `Erro ${resposta.status} ao falar com a API.`;
+  for (let tentativa = 1; tentativa <= TENTATIVAS; tentativa += 1) {
+    const controlador = new AbortController();
+    const tempo = setTimeout(() => controlador.abort(), LIMITE_DE_TEMPO_MS);
+
     try {
-      const corpo = (await resposta.json()) as { error?: string };
-      if (corpo.error) mensagem = corpo.error;
-    } catch {
-      // Resposta sem JSON: fica a mensagem padrão.
+      const resposta = await fetch(`${API}${caminho}`, {
+        ...opcoes,
+        headers,
+        signal: controlador.signal,
+      });
+      clearTimeout(tempo);
+
+      if (!resposta.ok) {
+        let mensagem = `Erro ${resposta.status} ao falar com a API.`;
+        try {
+          const corpo = (await resposta.json()) as { error?: string };
+          if (corpo.error) mensagem = corpo.error;
+        } catch {
+          // Resposta sem JSON: fica a mensagem padrão.
+        }
+        throw new ErroDeApi(resposta.status, mensagem);
+      }
+
+      return (await resposta.json()) as T;
+    } catch (erro) {
+      clearTimeout(tempo);
+      ultimoErro = erro;
+
+      // Erro da própria API (4xx, 5xx com corpo) não adianta repetir.
+      if (erro instanceof ErroDeApi) throw erro;
+      if (tentativa === TENTATIVAS) break;
+      await esperar(ESPERA_ENTRE_TENTATIVAS_MS);
     }
-    throw new ErroDeApi(resposta.status, mensagem);
   }
 
-  return (await resposta.json()) as T;
+  if (semResposta(ultimoErro)) {
+    throw new ErroDeApi(
+      0,
+      'A API não respondeu. Em hospedagem gratuita ela hiberna quando fica sem tráfego — ' +
+        'aguarde alguns segundos e tente de novo.',
+    );
+  }
+  throw ultimoErro;
 }
 
 export async function listarCenarios(): Promise<{

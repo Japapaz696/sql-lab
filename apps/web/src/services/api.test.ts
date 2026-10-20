@@ -2,38 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ErroDeApi, idDaSessao } from './api';
 
-describe('sessão do laboratório', () => {
-  beforeEach(() => {
-    window.localStorage.clear();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('gera um identificador aleatório de 32 caracteres hexadecimais', () => {
-    const id = idDaSessao();
-    expect(id).toMatch(/^[0-9a-f]{32}$/);
-  });
-
-  it('mantém o mesmo identificador entre chamadas', () => {
-    expect(idDaSessao()).toBe(idDaSessao());
-  });
-
-  it('gera identificadores diferentes para sessões diferentes', () => {
-    const primeiro = idDaSessao();
-    window.localStorage.clear();
-    const segundo = idDaSessao();
-    expect(primeiro).not.toBe(segundo);
-  });
-
-  it('não guarda nome, e-mail ou documento', () => {
-    idDaSessao();
-    const guardado = JSON.stringify(window.localStorage);
-    expect(guardado).not.toMatch(/email|nome|documento|@/i);
-  });
-});
-
 describe('cliente da API', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -117,11 +85,120 @@ describe('cliente da API', () => {
   });
 });
 
+/**
+ * Em hospedagem gratuita, a API hiberna depois de um tempo sem tráfego e leva
+ * cerca de um minuto para acordar. A interface precisa tratar isso como
+ * "está acordando", e não como "está quebrada".
+ */
+describe('partida a frio da API', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('repete a requisição quando a API não responde', async () => {
+    let chamadas = 0;
+    const spy = vi.fn().mockImplementation(async () => {
+      chamadas += 1;
+      if (chamadas < 3) throw new TypeError('fetch failed');
+      return { ok: true, status: 200, json: async () => ({ cenarios: [] }) };
+    });
+    vi.stubGlobal('fetch', spy);
+
+    const { listarCenarios } = await import('./api');
+    const promessa = listarCenarios();
+    await vi.advanceTimersByTimeAsync(10_000);
+    const resultado = await promessa;
+
+    expect(chamadas).toBe(3);
+    expect(resultado.cenarios).toEqual([]);
+  });
+
+  it('explica que a API está acordando quando todas as tentativas falham', async () => {
+    const spy = vi.fn().mockRejectedValue(new TypeError('fetch failed'));
+    vi.stubGlobal('fetch', spy);
+
+    const { listarCenarios } = await import('./api');
+    // A espera precisa ser anexada antes de o relógio andar: do contrário a
+    // promessa rejeita sem ninguém ouvindo, e o Node acusa o unhandled.
+    const promessa = expect(listarCenarios()).rejects.toThrow(/hiberna|tente de novo/i);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await promessa;
+  });
+
+  it('não repete quando a API responde com erro próprio', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: 'Cenário não encontrado' }),
+    });
+    vi.stubGlobal('fetch', spy);
+
+    const { detalharCenario } = await import('./api');
+    await expect(detalharCenario('inexistente')).rejects.toThrow('Cenário não encontrado');
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('não repete quando a API responde com erro de validação', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: 'categoryId deve ser um UUID' }),
+    });
+    vi.stubGlobal('fetch', spy);
+
+    const { executarCenario } = await import('./api');
+    await expect(executarCenario('x', 'SELECT 1')).rejects.toThrow(/UUID/);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserva o status HTTP no erro final', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: 'Erro interno' }),
+    });
+    vi.stubGlobal('fetch', spy);
+
+    const { listarCenarios } = await import('./api');
+    await expect(listarCenarios()).rejects.toMatchObject({ status: 500 });
+  });
+});
+
+describe('identificador de sessão', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('é aleatório e não guarda dados pessoais', () => {
+    const id = idDaSessao();
+    expect(id).toMatch(/^[0-9a-f]{32}$/);
+    const guardado = JSON.stringify(window.localStorage);
+    expect(guardado).not.toMatch(/email|nome|documento|@/i);
+  });
+
+  it('mantém o mesmo identificador entre chamadas', () => {
+    expect(idDaSessao()).toBe(idDaSessao());
+  });
+
+  it('gera identificadores diferentes para sessões diferentes', () => {
+    const primeiro = idDaSessao();
+    window.localStorage.clear();
+    expect(idDaSessao()).not.toBe(primeiro);
+  });
+});
+
 describe('classe de erro', () => {
   it('guarda o status e a mensagem', () => {
-    const erro = new ErroDeApi(422, 'campo inválido');
+    const erro = new ErroDeApi(0, 'A API não respondeu');
     expect(erro).toBeInstanceOf(Error);
-    expect(erro.status).toBe(422);
-    expect(erro.message).toBe('campo inválido');
+    expect(erro.status).toBe(0);
+    expect(erro.message).toMatch(/não respondeu/);
   });
 });
