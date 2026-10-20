@@ -54,6 +54,7 @@ export function App() {
   const [plano, setPlano] = useState<ExplainResponse | null>(null);
   const [erro, setErro] = useState('');
   const [carregando, setCarregando] = useState(true);
+  const [acordando, setAcordando] = useState(false);
   const [executando, setExecutando] = useState(false);
   const [aba, setAba] = useState<Aba>('cenario');
   const [dicaVisivel, setDicaVisivel] = useState(0);
@@ -95,6 +96,19 @@ export function App() {
     };
   }, []);
 
+  // A API do laboratório fica hospedada no plano gratuito, que hiberna
+  // depois de um tempo sem tráfego. A primeira carga depois disso leva
+  // cerca de um minuto, e "Carregando…" sozinho não explica a demora —
+  // parece que a página quebrou.
+  useEffect(() => {
+    if (!carregando) {
+      setAcordando(false);
+      return;
+    }
+    const temporizador = setTimeout(() => setAcordando(true), 6000);
+    return () => clearTimeout(temporizador);
+  }, [carregando]);
+
   // Carrega o detalhe do cenário selecionado.
   useEffect(() => {
     if (!selecionado) return;
@@ -105,7 +119,6 @@ export function App() {
     setPlano(null);
     setDicaVisivel(0);
     setAba('cenario');
-
     detalharCenario(selecionado)
       .then((dado) => {
         if (cancelado) return;
@@ -250,7 +263,14 @@ export function App() {
       <main className="shell layout">
         <nav className="lista-cenarios" aria-label="Cenários do laboratório">
           <h2 className="titulo-secao">Cenários</h2>
-          {carregando ? <p className="suave">Carregando…</p> : null}
+          {carregando ? (
+            <p className="suave">
+              {acordando
+                ? 'Acordando a API. Em hospedagem gratuita ela hiberna quando fica sem ' +
+                  'tráfego, e a primeira carga leva cerca de um minuto. Isso é normal.'
+                : 'Carregando…'}
+            </p>
+          ) : null}
           <ol>
             {cenarios.map((cenario) => (
               <li key={cenario.id}>
