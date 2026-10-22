@@ -3,9 +3,11 @@ import pg from 'pg';
 
 import { poolAdmin } from '../database/pool.js';
 import { prepararBanco } from '../database/setup.js';
+import { TABELAS_DO_ERP } from '../database/tabelas-do-erp.js';
 import { cenarios } from '../scenarios/index.js';
+import { descreverEsquema } from '../services/schema.service.js';
+import { avaliarCenario, compararResultados } from '../services/scenarios.service.js';
 import { executarConsulta } from '../services/sql.service.js';
-import { compararResultados } from '../services/scenarios.service.js';
 
 /**
  * A suíte roda contra o banco de teste: o `setup.ts` redireciona
@@ -234,5 +236,49 @@ describe('comparação de resultados', () => {
     const { iguais, feedback } = compararResultados([['a']], [['b']]);
     expect(iguais).toBe(false);
     expect(feedback).toMatch(/conteúdo/);
+  });
+});
+
+describe('esquema exposto ao aluno', () => {
+  it('lista somente as nove tabelas do ERP, sem a tabela interna', async () => {
+    const tabelas = await descreverEsquema();
+
+    expect(tabelas.map((tabela) => tabela.nome).sort()).toEqual([...TABELAS_DO_ERP].sort());
+    expect(tabelas.some((tabela) => tabela.nome === 'progresso_cenarios')).toBe(false);
+  });
+
+  it('descreve colunas, chave primária e contagem', async () => {
+    const tabelas = await descreverEsquema();
+    const clientes = tabelas.find((tabela) => tabela.nome === 'clientes');
+
+    expect(clientes).toBeDefined();
+    expect(clientes?.linhas).toBe(6);
+    expect(clientes?.chavePrimaria).toEqual(['id']);
+    expect(clientes?.colunas.map((coluna) => coluna.nome)).toContain('codigo');
+  });
+});
+
+describe('avaliação do aluno', () => {
+  it('não inventa contagem quando a consulta falha', async () => {
+    const avaliacao = await avaliarCenario('titulo-vencido', 'SELECT * FROM tabela_inexistente');
+
+    expect(avaliacao).not.toBeNull();
+    expect(avaliacao?.verificacao.acertou).toBe(false);
+    expect(avaliacao?.verificacao.linhasEsperadas).toBeNull();
+    expect(avaliacao?.verificacao.linhasObtidas).toBeNull();
+    expect(avaliacao?.consulta.ok).toBe(false);
+  });
+
+  it('devolve a consulta executada, sem repetir o SQL', async () => {
+    const referencia = cenarios.find((cenario) => cenario.id === 'titulo-vencido');
+    expect(referencia).toBeDefined();
+
+    const avaliacao = await avaliarCenario(referencia!.id, referencia!.sqlReferencia);
+
+    expect(avaliacao?.verificacao.acertou).toBe(true);
+    expect(avaliacao?.consulta.ok).toBe(true);
+    expect(avaliacao?.consulta.totalLinhas).toBe(2);
+    expect(avaliacao?.verificacao.linhasEsperadas).toBe(2);
+    expect(avaliacao?.verificacao.linhasObtidas).toBe(2);
   });
 });

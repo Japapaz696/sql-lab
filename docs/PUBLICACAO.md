@@ -166,6 +166,206 @@ psql "$DATABASE_ADMIN_URL" -c "SELECT count(*) FROM clientes"
 # esperado: 6
 ```
 
+## Passo 2.5 — Banco que já está no ar: fechar o progresso das sessões
+
+Se o banco já foi preparado antes desta versão, ele ainda tem uma brecha: o
+papel de execução consegue ler `progresso_cenarios`, a tabela interna que
+guarda as tentativas de **todas** as sessões. O isolamento por sessão na API
+não protege o dado no banco — quem descobrisse a sessão de outra pessoa
+poderia lê-la pela rota de consulta livre.
+
+`db/privilegios.sql` já nasceu corrigido para bancos novos. Para um banco que
+já está no ar, a migração é separada e **idempotente**:
+
+```bash
+psql "$DATABASE_ADMIN_URL" -v ON_ERROR_STOP=1 \
+  -f db/migracoes/2026-10-22-isolar-progresso.sql
+```
+
+Ela roda com o **dono do schema** (nunca com `sql_lab_exec`) e faz três coisas:
+
+1. revoga a concessão padrão de `SELECT` para tabelas futuras;
+2. revoga todo acesso a `public.progresso_cenarios`;
+3. reafirma `SELECT` apenas nas nove tabelas do ERP.
+
+Pode ser executada mais de uma vez sem efeito colateral. A API não precisa ser
+reiniciada: o PostgreSQL aplica os privilégios na hora.
+
+### Conferir o resultado
+
+```bash
+# deve devolver false
+psql "$DATABASE_ADMIN_URL" -c \
+  "SELECT has_table_privilege('sql_lab_exec', 'public.progresso_cenarios', 'SELECT') AS pode_ler_progresso;"
+
+# deve devolver nove linhas, todas com pode_ler = true
+psql "$DATABASE_ADMIN_URL" -c \
+  "SELECT tablename, has_table_privilege('sql_lab_exec', format('public.%I', tablename), 'SELECT') AS pode_ler
+     FROM pg_tables
+    WHERE schemaname = 'public' AND tablename <> 'progresso_cenarios'
+    ORDER BY tablename;"
+```
+
+E, como o papel de execução:
+
+```bash
+psql "$DATABASE_URL" -c "SELECT count(*) FROM progresso_cenarios;"
+# esperado: ERROR: permission denied for table progresso_cenarios
+```
+
+A API também deixa de listar a tabela no esquema do ERP — a lista de tabelas é
+explícita em `apps/api/src/database/tabelas-do-erp.ts`.
+
+### Reversão mínima
+
+A migração não altera dados: desfazer é só voltar o privilégio. Se — e somente
+se — a API antiga realmente precisar ler `progresso_cenarios` pelo papel de
+execução, restaure **apenas essa tabela**:
+
+```sql
+GRANT SELECT ON TABLE public.progresso_cenarios TO sql_lab_exec;
+```
+
+Não restaure `ALTER DEFAULT PRIVILEGES ... GRANT SELECT ON TABLES`: isso
+reabriria a leitura de qualquer tabela futura e não é necessário para a
+compatibilidade. A API grava e lê o progresso pela conexão administrativa
+(`DATABASE_ADMIN_URL`), não pelo papel de execução. Prefira corrigir a causa em
+vez de reverter.
+
+### Runbook da migração em produção (somente com autorização)
+
+> Esta seção é um roteiro para quando houver autorização específica. Nada aqui
+> foi executado em produção. Não faça testes de carga contra a API pública.
+
+**Ordem recomendada:** publicar a API nova, migrar o banco e só então publicar a
+interface. A migração é apenas de privilégios — não altera dados — e a API
+antiga continua compatível (ver abaixo), então qualquer ordem funciona; a ordem
+acima reduz a janela em que o banco ainda permite ler o progresso alheio.
+
+#### 0. Pré-checagens
+
+1. Confirme que a conexão administrativa é a do SQL Lab e não a de outro
+   aplicativo:
+
+   ```bash
+   psql "$DATABASE_ADMIN_URL" -v ON_ERROR_STOP=1 -c \
+     "SELECT current_database(), current_user, inet_server_addr();"
+   psql "$DATABASE_ADMIN_URL" -v ON_ERROR_STOP=1 -c \
+     "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY 1;"
+   ```
+
+   O banco deve conter as dez tabelas do laboratório: as nove do ERP
+   (`chamados`, `clientes`, `depositos`, `estoque`, `itens_pedido`,
+   `movimentacoes_estoque`, `pagamentos`, `pedidos`, `produtos`) e
+   `progresso_cenarios`. Se houver tabelas de outro sistema, **pare**: a conexão
+   não é a do SQL Lab.
+
+2. Registre os privilégios atuais:
+
+   ```bash
+   psql "$DATABASE_ADMIN_URL" -c \
+     "SELECT table_name, privilege_type
+        FROM information_schema.role_table_grants
+       WHERE grantee = 'sql_lab_exec' AND table_schema = 'public'
+       ORDER BY table_name, privilege_type;"
+   ```
+
+   Antes da migração, o esperado é `SELECT` nas dez tabelas, incluindo
+   `progresso_cenarios`.
+
+3. Confirme que a API antiga usa a conexão administrativa para o progresso:
+   no commit anterior (`84fb57e`), `progress.service.ts` chama
+   `poolDeEscrita()`, que devolve `poolAdmin` quando `DATABASE_ADMIN_URL` existe.
+   No painel do Render, confirme que a variável **existe** (sem copiar o valor).
+   As linhas de progresso já gravadas em produção são evidência de que ela está
+   configurada.
+
+#### 1. Ponto de recuperação no Neon
+
+No console do Neon, no projeto do SQL Lab:
+
+1. **Branches → Create branch**;
+2. nome `backup-pre-p0-2026-10-22`;
+3. pai: a branch de produção (`main`/`primary`);
+4. ponto: o instante atual.
+
+A branch é copy-on-write: não copia os dados e não interrompe a produção. Antes
+de migrar, conecte na branch nova e confira que ela responde e tem os mesmos
+números da produção:
+
+```bash
+psql "$NEON_BRANCH_URL" -c \
+  "SELECT (SELECT count(*) FROM clientes) AS clientes,
+          (SELECT count(*) FROM progresso_cenarios) AS progresso,
+          (SELECT count(*) FROM pg_tables WHERE schemaname = 'public') AS tabelas;"
+```
+
+Se o plano tiver PITR, anote também `SELECT now(), pg_current_wal_lsn();`. A
+janela de restauração depende do plano; confirme no painel. Para reverter, crie
+uma branch a partir do ponto salvo ou use o histórico da branch — não é preciso
+restaurar por cima da produção.
+
+#### 2. Publicar a API
+
+1. No Render, **sql-lab-api → Manual Deploy → Deploy latest commit** (depois do
+   merge) ou o commit específico revisado.
+2. Acompanhe o build e o log de partida. A API só sobe se a separação de
+   privilégios estiver de pé; o log mostra as linhas `[privilegios]`.
+3. Confira `GET /health` (200) e `GET /ready` (200 com `banco: ok`).
+4. Não rode teste de sobrecarga. As verificações de 429/503 já foram feitas no
+   ambiente isolado.
+
+> O serviço está com `autoDeploy` desabilitado no painel. O `render.yaml`
+> histórico ainda declara `autoDeploy: true`; não sincronize o Blueprint sem
+> antes alinhar esse campo, para não ligar o deploy automático por engano.
+
+#### 3. Migrar o banco
+
+```bash
+psql "$DATABASE_ADMIN_URL" -v ON_ERROR_STOP=1 \
+  -f db/migracoes/2026-10-22-isolar-progresso.sql
+```
+
+Confira o resultado com as consultas da seção anterior e, como papel de
+execução:
+
+```bash
+psql "$DATABASE_URL" -c "SELECT count(*) FROM progresso_cenarios;"
+# esperado: ERROR: permission denied for table progresso_cenarios
+```
+
+A rota `GET /api/v1/scenarios/esquema/tabelas` deve devolver nove tabelas. Uma
+execução de cenário com sessão deve continuar gravando o progresso (pela conexão
+administrativa).
+
+#### 4. Publicar a interface
+
+Só depois de a API protegida estar validada em produção. Rode o workflow manual
+`pages.yml` com `api_url=https://sql-lab-api-7bdv.onrender.com` e
+`base_path=/sql-lab/`, e confira a origens no CORS: `ALLOWED_ORIGIN` precisa
+conter `https://japapaz696.github.io` (sem o caminho `/sql-lab/`).
+
+#### 5. Rollback
+
+- **API:** Render → **Deploys** → deployment anterior que estava no ar →
+  **Redeploy**. Anote o ID do deployment atual antes de publicar.
+- **Banco:** a migração não altera dados. Só há rollback se aparecer uma
+  dependência real do papel de execução em `progresso_cenarios`; nesse caso,
+  `GRANT SELECT` **apenas** nessa tabela (seção “Reversão mínima”). Não restaure
+  privilégios padrão.
+- **Interface:** reexecute o workflow a partir do commit anterior ou reimplante
+  o artefato anterior do Pages.
+
+#### 6. Por que a API antiga não quebra
+
+- `progress.service.ts` usa `poolDeEscrita()` → `DATABASE_ADMIN_URL`; perder
+  `SELECT` como `sql_lab_exec` não afeta a gravação nem a leitura do progresso.
+- `schema.service.ts` lê `information_schema.tables`; sem privilégio, a tabela
+  interna deixa de aparecer e a listagem devolve as nove tabelas do ERP, sem
+  tentar `count(*)` nela.
+- A verificação de partida só exige que o papel de execução **não escreva** e
+  que `clientes` esteja visível; ela não exige `SELECT` em `progresso_cenarios`.
+
 ## Passo 3 — Publicar a API no Render
 
 1. <https://dashboard.render.com> → **New → Web Service** → conecte o
@@ -218,15 +418,30 @@ CI e não no deploy.
 
 3. Em **Environment**, defina:
 
-   | Chave                | Valor                                                          |
-   | -------------------- | -------------------------------------------------------------- |
-   | `NODE_ENV`           | `production`                                                   |
-   | `DATABASE_URL`       | `sql_lab_exec` na string **pooled** do Neon                    |
-   | `DATABASE_ADMIN_URL` | dono do schema na string **direct** do Neon                    |
-   | `ALLOWED_ORIGIN`     | a URL da interface, sem barra final                            |
-   | `MAX_RESULT_ROWS`    | `200`                                                          |
-   | `QUERY_TIMEOUT_MS`   | `5000`                                                         |
-   | `PORT`               | `3000` (o Render define o `PORT` sozinho; pode deixar de fora) |
+   | Chave                    | Valor                                                          |
+   | ------------------------ | -------------------------------------------------------------- |
+   | `NODE_ENV`               | `production`                                                   |
+   | `DATABASE_URL`           | `sql_lab_exec` na string **pooled** do Neon                    |
+   | `DATABASE_ADMIN_URL`     | dono do schema na string **direct** do Neon                    |
+   | `ALLOWED_ORIGIN`         | a URL da interface, sem barra final                            |
+   | `MAX_RESULT_ROWS`        | `200`                                                          |
+   | `QUERY_TIMEOUT_MS`       | `5000`                                                         |
+   | `MAX_CONCURRENT_QUERIES` | `4` (mínimo útil: `2`)                                         |
+   | `QUEUE_WAIT_MS`          | `8000`                                                         |
+   | `RATE_LIMIT_EXECUTE_MAX` | `20` por minuto, por IP                                        |
+   | `RATE_LIMIT_EXPLAIN_MAX` | `15` por minuto, por IP                                        |
+   | `RATE_LIMIT_WINDOW_MS`   | `60000`                                                        |
+   | `PORT`                   | `3000` (o Render define o `PORT` sozinho; pode deixar de fora) |
+
+   > As quatro variáveis de limite têm padrão no código; só defina se quiser
+   > mudar o comportamento. O limite é por IP e por janela de 60 s, com
+   > `Retry-After` na resposta 429. Atrás do proxy do Render, a API confia em
+   > **um** salto de `X-Forwarded-For` — confiar em todos permitiria burlar o
+   > limite forjando o cabeçalho.
+   >
+   > `MAX_CONCURRENT_QUERIES` conta consultas SQL, não requisições: cada
+   > execução usa duas (a do aluno e a de referência). Com `1`, a própria
+   > consulta de referência não caberia e toda requisição acabaria em 503.
 
    > `ALLOWED_ORIGIN` aceita uma lista separada por vírgula, para a mesma API
    > servir à interface de produção e à de desenvolvimento.

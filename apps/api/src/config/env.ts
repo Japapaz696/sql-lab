@@ -67,6 +67,29 @@ export const env = {
   maxResultRows: inteiro('MAX_RESULT_ROWS', 200),
   queryTimeoutMs: inteiro('QUERY_TIMEOUT_MS', 5000),
   /**
+   * Quantas consultas do aluno podem rodar ao mesmo tempo neste processo.
+   *
+   * O pool de leitura tem cinco conexões. Quatro consultas simultâneas deixam
+   * uma livre para o `/ready` e para a descrição do esquema; o excedente
+   * espera na fila em vez de esgotar o pool e derrubar todo mundo.
+   */
+  maxConcurrentQueries: inteiro('MAX_CONCURRENT_QUERIES', 4),
+  /**
+   * Quanto tempo uma consulta espera na fila antes de receber 503.
+   *
+   * Esperar para sempre só transfere o problema: o navegador desiste, a
+   * conexão fica presa e a fila cresce. Oito segundos é curto o bastante para
+   * o aluno tentar de novo e longo o bastante para absorver um pico.
+   */
+  queueWaitMs: inteiro('QUEUE_WAIT_MS', 8000),
+  /**
+   * Limites por IP, por janela. A execução é a rota mais cara (roda a consulta
+   * e a referência); o EXPLAIN é mais barato, mas também abre conexão.
+   */
+  rateLimitExecuteMax: inteiro('RATE_LIMIT_EXECUTE_MAX', 20),
+  rateLimitExplainMax: inteiro('RATE_LIMIT_EXPLAIN_MAX', 15),
+  rateLimitWindowMs: inteiro('RATE_LIMIT_WINDOW_MS', 60_000),
+  /**
    * Em produção, a separação de privilégios é obrigatória: a API não sobe se
    * o usuário de execução puder escrever, e a recusa é testada contra o banco.
    */

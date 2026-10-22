@@ -1,4 +1,5 @@
 import { withReadOnlyClient } from '../database/pool.js';
+import { TABELAS_DO_ERP } from '../database/tabelas-do-erp.js';
 
 export type ColunaDoEsquema = {
   nome: string;
@@ -24,16 +25,23 @@ export type TabelaDoEsquema = {
  *
  * A informação vem do catálogo do PostgreSQL (`information_schema` e
  * `pg_catalog`), não de uma lista escrita à mão: o que aparece é o que
- * existe no banco.
+ * existe no banco. A exceção é o filtro por `TABELAS_DO_ERP`: o banco também
+ * guarda `progresso_cenarios`, que é infraestrutura do laboratório e não
+ * conteúdo do ERP — não deve aparecer para o aluno.
  */
 export async function descreverEsquema(): Promise<TabelaDoEsquema[]> {
   return withReadOnlyClient(async (client) => {
-    const { rows: tabelas } = await client.query(`
-      SELECT table_name
-      FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-      ORDER BY table_name
-    `);
+    const { rows: tabelas } = await client.query(
+      `
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_type = 'BASE TABLE'
+          AND table_name = ANY($1::text[])
+        ORDER BY table_name
+      `,
+      [[...TABELAS_DO_ERP]],
+    );
 
     const resultado: TabelaDoEsquema[] = [];
 

@@ -42,16 +42,17 @@ export function ExploradorEsquema({ tabelas }: Props) {
             <li key={tabela.nome}>
               <button
                 type="button"
-                className={expandida ? 'tabela do-esquema expandida' : 'tabela do-esquema'}
+                className={expandida ? 'tabela-do-esquema expandida' : 'tabela-do-esquema'}
                 onClick={() => setAberta(expandida ? null : tabela.nome)}
                 aria-expanded={expandida}
+                aria-controls={`detalhe-${tabela.nome}`}
               >
                 <span className="nome-tabela">{tabela.nome}</span>
                 <span className="contagem-tabela">{tabela.linhas} linha(s)</span>
               </button>
 
               {expandida ? (
-                <div className="detalhe-tabela">
+                <div className="detalhe-tabela" id={`detalhe-${tabela.nome}`}>
                   <table className="tabela-colunas">
                     <thead>
                       <tr>

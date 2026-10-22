@@ -135,7 +135,12 @@ const DETALHE = {
 };
 
 function resposta(corpo: unknown, status = 200) {
-  return { ok: status >= 200 && status < 300, status, json: async () => corpo };
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: new Headers({ 'content-type': 'application/json' }),
+    json: async () => corpo,
+  };
 }
 
 /**
@@ -158,6 +163,26 @@ function apiSimulada() {
 
     if (caminho.endsWith('/execute')) {
       const sql = JSON.parse(String(init?.body ?? '{}')).sql as string;
+
+      // Consulta que não roda: a verificação não tem contagem para comparar.
+      if (sql.includes('tabela_inexistente')) {
+        return resposta({
+          consulta: {
+            ok: false,
+            erro: 'relation "tabela_inexistente" does not exist',
+            duracaoMs: 3,
+          },
+          verificacao: {
+            acertou: false,
+            feedback: 'A consulta não rodou: relation "tabela_inexistente" does not exist',
+            linhasEsperadas: null,
+            linhasObtidas: null,
+          },
+          tentativas: 1,
+          resolvido: false,
+        });
+      }
+
       const acertou = sql.includes('HAVING');
       return resposta({
         consulta: {
@@ -350,5 +375,55 @@ describe('a interface do laboratório', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('não mostra comparação de linhas quando a consulta não rodou', async () => {
+    await montar(apiSimulada());
+
+    const editor = container.querySelector('textarea') as HTMLTextAreaElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        'value',
+      )?.set;
+      setter?.call(editor, 'SELECT * FROM tabela_inexistente');
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    const botao = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Executar',
+    );
+
+    await act(async () => {
+      botao?.click();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain('A consulta não rodou');
+    // Sem resultado do aluno não existe comparação: dizer "0 linhas" seria
+    // uma informação falsa.
+    expect(container.textContent).not.toContain('A referência devolve');
+  });
+
+  it('as abas seguem o padrão de tablist e respondem às setas', async () => {
+    await montar(apiSimulada());
+
+    const abas = Array.from(container.querySelectorAll('[role="tab"]'));
+    expect(abas).toHaveLength(2);
+    expect(abas[0].getAttribute('aria-selected')).toBe('true');
+    expect(abas[0].getAttribute('tabindex')).toBe('0');
+    expect(abas[1].getAttribute('tabindex')).toBe('-1');
+    expect(abas[0].getAttribute('aria-controls')).toBe('painel-cenario');
+    expect(container.querySelector('#painel-cenario')?.getAttribute('role')).toBe('tabpanel');
+
+    await act(async () => {
+      abas[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    });
+
+    const depois = Array.from(container.querySelectorAll('[role="tab"]'));
+    expect(depois[1].getAttribute('aria-selected')).toBe('true');
+    expect(depois[1].getAttribute('tabindex')).toBe('0');
+    expect(document.activeElement).toBe(depois[1]);
+    expect(container.querySelector('#painel-explicacao')?.getAttribute('role')).toBe('tabpanel');
   });
 });

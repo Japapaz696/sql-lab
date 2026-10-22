@@ -15,7 +15,7 @@
   --borda-forte: #364054;
   --texto: #e6edf3;
   --texto-suave: #9aa7b8;
-  --texto-fraco: #6b7787;
+  --texto-fraco: #8492a6;
   --acento: #3fb950;
   --acento-suave: #1f6f33;
   --perigo: #f85149;
@@ -620,8 +620,7 @@ kbd {
   gap: 0.5rem;
 }
 
-.tabela-do-esquema,
-.tabela do-esquema {
+.tabela-do-esquema {
   width: 100%;
   display: flex;
   justify-content: space-between;
@@ -637,12 +636,17 @@ kbd {
   text-align: left;
 }
 
-.tabela do-esquema:hover {
+.tabela-do-esquema:hover {
   border-color: var(--borda-forte);
   background: var(--superficie-2);
 }
 
-.tabela do-esquema.expandida {
+.tabela-do-esquema:focus-visible {
+  outline: 2px solid var(--acento);
+  outline-offset: 2px;
+}
+
+.tabela-do-esquema.expandida {
   border-color: var(--acento);
   background: var(--superficie-2);
 }

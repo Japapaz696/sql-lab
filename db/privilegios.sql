@@ -51,9 +51,33 @@ BEGIN
 END
 $$;
 
--- O papel de execução precisa enxergar o schema e ler as tabelas.
+-- O papel de execução precisa enxergar o schema e ler as tabelas do ERP.
 GRANT USAGE ON SCHEMA public TO sql_lab_exec;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO sql_lab_exec;
+
+-- A lista é explícita de propósito: `progresso_cenarios` guarda o progresso
+-- das sessões e não é conteúdo didático. Um `GRANT ... ON ALL TABLES` daria
+-- SELECT a ela e faria qualquer tabela interna nova vazar por padrão. Ao
+-- acrescentar uma tabela ao ERP, inclua-a aqui e em
+-- `apps/api/src/database/tabelas-do-erp.ts`.
+GRANT SELECT ON TABLE
+  chamados,
+  clientes,
+  depositos,
+  estoque,
+  itens_pedido,
+  movimentacoes_estoque,
+  pagamentos,
+  pedidos,
+  produtos
+TO sql_lab_exec;
+
+-- Tabelas internas ficam fora, com revogação explícita: a intenção fica no
+-- arquivo e uma concessão anterior é desfeita.
+REVOKE ALL ON TABLE progresso_cenarios FROM sql_lab_exec;
+
+-- Sem privilégio padrão para tabelas futuras: a lista acima é a fonte da
+-- verdade. O REVOKE também desfaz uma configuração anterior.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE SELECT ON TABLES FROM sql_lab_exec;
 
 -- E precisa poder entrar no banco. Em hospedagens gerenciadas o papel novo
 -- não vem com CONNECT, e a conexão falha antes de qualquer consulta.
@@ -64,9 +88,6 @@ BEGIN
   EXECUTE format('GRANT CONNECT ON DATABASE %I TO sql_lab_exec', banco);
 END
 $$;
-
--- Tabelas criadas depois também entram na concessão.
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO sql_lab_exec;
 
 -- E nada além de leitura: a revogação é explícita, para ficar claro que a
 -- ausência de privilégio é intencional e não um esquecimento.
