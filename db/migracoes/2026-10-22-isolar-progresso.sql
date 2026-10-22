@@ -81,12 +81,12 @@ COMMIT;
 -- E a API, ao listar o esquema, deve devolver exatamente essas nove tabelas.
 --
 -- -------------------------------------------------------------
--- Reversão (somente se necessário; desfaz o isolamento)
+-- Reversão mínima (somente se a API antiga realmente precisar da tabela)
 -- -------------------------------------------------------------
 --
 --   GRANT SELECT ON TABLE public.progresso_cenarios TO sql_lab_exec;
---   ALTER DEFAULT PRIVILEGES IN SCHEMA public
---     GRANT SELECT ON TABLES TO sql_lab_exec;
 --
--- A reversão reabre a leitura de todas as sessões pelo papel de execução.
--- Prefira corrigir a causa em vez de reverter.
+-- Não restaure `ALTER DEFAULT PRIVILEGES ... GRANT SELECT ON TABLES`: a
+-- concessão padrão não é necessária para a compatibilidade e reabriria a
+-- leitura de qualquer tabela futura. A API grava e lê o progresso pela conexão
+-- administrativa (`DATABASE_ADMIN_URL`), não pelo papel de execução.
