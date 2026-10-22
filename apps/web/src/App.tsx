@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type KeyboardEvent as KeyboardEventDoReact,
+} from 'react';
 import type { ExplainResponse, ScenarioDetail, ScenarioSummary } from '@sql-lab/shared';
 
 import { ExploradorEsquema } from './components/ExploradorEsquema';
@@ -48,8 +53,8 @@ export function App() {
   const [feedback, setFeedback] = useState<{
     acertou: boolean;
     texto: string;
-    linhasEsperadas: number;
-    linhasObtidas: number;
+    linhasEsperadas: number | null;
+    linhasObtidas: number | null;
   } | null>(null);
   const [plano, setPlano] = useState<ExplainResponse | null>(null);
   const [erro, setErro] = useState('');
@@ -57,6 +62,19 @@ export function App() {
   const [acordando, setAcordando] = useState(false);
   const [executando, setExecutando] = useState(false);
   const [aba, setAba] = useState<Aba>('cenario');
+
+  /**
+   * Teclado nas abas: as setas trocam o painel e movem o foco, como manda o
+   * padrão de `tablist`. Sem isso, quem navega por teclado precisa sair da
+   * lista de abas para trocar de seção.
+   */
+  function aoTeclarAba(evento: KeyboardEventDoReact<HTMLButtonElement>) {
+    if (evento.key !== 'ArrowLeft' && evento.key !== 'ArrowRight') return;
+    evento.preventDefault();
+    const proxima: Aba = aba === 'cenario' ? 'explicacao' : 'cenario';
+    setAba(proxima);
+    document.getElementById(`aba-${proxima}`)?.focus();
+  }
   const [dicaVisivel, setDicaVisivel] = useState(0);
   const [esquemaAberto, setEsquemaAberto] = useState(false);
   const [copiado, setCopiado] = useState(false);
@@ -319,25 +337,33 @@ export function App() {
                 <button
                   type="button"
                   role="tab"
+                  id="aba-cenario"
+                  aria-controls="painel-cenario"
                   aria-selected={aba === 'cenario'}
+                  tabIndex={aba === 'cenario' ? 0 : -1}
                   className={aba === 'cenario' ? 'aba ativa' : 'aba'}
                   onClick={() => setAba('cenario')}
+                  onKeyDown={aoTeclarAba}
                 >
                   Resolver
                 </button>
                 <button
                   type="button"
                   role="tab"
+                  id="aba-explicacao"
+                  aria-controls="painel-explicacao"
                   aria-selected={aba === 'explicacao'}
+                  tabIndex={aba === 'explicacao' ? 0 : -1}
                   className={aba === 'explicacao' ? 'aba ativa' : 'aba'}
                   onClick={() => setAba('explicacao')}
+                  onKeyDown={aoTeclarAba}
                 >
                   Entender
                 </button>
               </div>
 
               {aba === 'cenario' ? (
-                <>
+                <div role="tabpanel" id="painel-cenario" aria-labelledby="aba-cenario" tabIndex={0}>
                   <div className="editor">
                     <div className="editor-topo">
                       <label htmlFor="sql" className="rotulo-editor">
@@ -387,7 +413,9 @@ export function App() {
                         {feedback.acertou ? '✓ Diagnóstico correto' : '→ Ainda não é o diagnóstico'}
                       </p>
                       <p>{feedback.texto}</p>
-                      {!feedback.acertou ? (
+                      {!feedback.acertou &&
+                      feedback.linhasEsperadas !== null &&
+                      feedback.linhasObtidas !== null ? (
                         <p className="retorno-detalhe">
                           A referência devolve {feedback.linhasEsperadas} linha(s); a sua consulta
                           devolveu {feedback.linhasObtidas}.
@@ -475,9 +503,15 @@ export function App() {
                       </button>
                     ) : null}
                   </div>
-                </>
+                </div>
               ) : (
-                <div className="explicacao">
+                <div
+                  className="explicacao"
+                  role="tabpanel"
+                  id="painel-explicacao"
+                  aria-labelledby="aba-explicacao"
+                  tabIndex={0}
+                >
                   <h3>Por que essa consulta funciona</h3>
                   <p>{detalhe.explicacao}</p>
 

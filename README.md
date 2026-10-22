@@ -152,13 +152,13 @@ npm run dev
 npm test
 ```
 
-**108 testes** em três suítes, contra um PostgreSQL de verdade:
+**136 testes** em três suítes, contra um PostgreSQL de verdade:
 
-| Suíte             | Testes | O que cobre                                                        |
-| ----------------- | ------ | ------------------------------------------------------------------ |
-| `packages/shared` | 3      | contrato das listas compartilhadas                                 |
-| `apps/api`        | 78     | carga, cenários, execução segura, privilégios, CORS e health check |
-| `apps/web`        | 27     | cliente da API, endereço da API e a interface renderizada          |
+| Suíte             | Testes | O que cobre                                                                           |
+| ----------------- | ------ | ------------------------------------------------------------------------------------- |
+| `packages/shared` | 3      | contrato das listas compartilhadas                                                    |
+| `apps/api`        | 99     | carga, cenários, execução segura, privilégios, sessões, limite de taxa e concorrência |
+| `apps/web`        | 34     | cliente da API, respostas de proxy, endereço da API e a interface renderizada         |
 
 A suíte da API recria o banco de teste do zero antes de rodar, para que o
 resultado de referência seja estável.

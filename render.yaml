@@ -69,5 +69,21 @@ services:
         value: 200
       - key: QUERY_TIMEOUT_MS
         value: 5000
+      # Quantas consultas rodam ao mesmo tempo no processo. Cada execução usa
+      # duas (aluno + referência); 4 deixa uma conexão livre no pool para o
+      # /ready. O excedente espera na fila.
+      - key: MAX_CONCURRENT_QUERIES
+        value: 4
+      # Espera máxima na fila antes de responder 503 com Retry-After.
+      - key: QUEUE_WAIT_MS
+        value: 8000
+      # Limite por IP, por janela de 60 s. Atrás do proxy do Render, o IP real
+      # chega pelo X-Forwarded-For (a API confia em um salto).
+      - key: RATE_LIMIT_EXECUTE_MAX
+        value: 20
+      - key: RATE_LIMIT_EXPLAIN_MAX
+        value: 15
+      - key: RATE_LIMIT_WINDOW_MS
+        value: 60000
       - key: PORT
         value: 3000

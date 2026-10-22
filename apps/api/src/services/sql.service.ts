@@ -2,6 +2,7 @@ import type { CellValue, ExplainRow, QueryOutcome } from '@sql-lab/shared';
 
 import { env } from '../config/env.js';
 import { lerComLimite, withReadOnlyClient } from '../database/pool.js';
+import { ErroDeSobrecarga, semaforoDeConsultas } from './concorrencia.js';
 
 /**
  * Normaliza um valor do PostgreSQL para algo que o JSON transporte sem
@@ -45,6 +46,9 @@ function explicarErro(mensagem: string): string {
   }
   if (texto.includes('read-only transaction')) {
     return 'Esta consulta tentaria escrever no banco. O laboratório é de leitura: filtre e consulte, sem alterar dados.';
+  }
+  if (texto.includes('permission denied') && texto.includes('progresso_cenarios')) {
+    return 'Esta tabela é de uso interno do laboratório, não faz parte do ERP. Use as tabelas listadas no esquema.';
   }
   if (texto.includes('permission denied')) {
     return 'O usuário de execução do laboratório só tem permissão de leitura.';
@@ -106,19 +110,25 @@ export async function executarConsulta(sql: string): Promise<QueryOutcome> {
   }
 
   try {
-    return await withReadOnlyClient(async (client) => {
-      const { linhas, colunas, truncado } = await lerComLimite(client, texto, env.maxResultRows);
+    return await semaforoDeConsultas.executar(() =>
+      withReadOnlyClient(async (client) => {
+        const { linhas, colunas, truncado } = await lerComLimite(client, texto, env.maxResultRows);
 
-      return {
-        ok: true,
-        colunas,
-        linhas: linhas.map((linha) => linha.map(normalizar)),
-        totalLinhas: linhas.length,
-        truncado,
-        duracaoMs: Date.now() - inicio,
-      };
-    });
+        return {
+          ok: true,
+          colunas,
+          linhas: linhas.map((linha) => linha.map(normalizar)),
+          totalLinhas: linhas.length,
+          truncado,
+          duracaoMs: Date.now() - inicio,
+        };
+      }),
+    );
   } catch (erro) {
+    // Sobrecarga não é erro de SQL: precisa chegar ao tratador da API para
+    // virar 503 com Retry-After, e não um 200 com "erro na consulta".
+    if (erro instanceof ErroDeSobrecarga) throw erro;
+
     return {
       ok: false,
       colunas: [],
@@ -149,19 +159,22 @@ export async function explicarConsulta(
   }
 
   try {
-    return await withReadOnlyClient(async (client) => {
-      const { linhas } = await lerComLimite(
-        client,
-        `EXPLAIN (COSTS OFF, FORMAT TEXT) ${texto}`,
-        200,
-      );
-      const explicacao: ExplainRow[] = linhas.map((linha) => ({
-        chave: String(linha[0] ?? ''),
-        detalhe: String(linha[1] ?? ''),
-      }));
-      return { linhas: explicacao };
-    });
+    return await semaforoDeConsultas.executar(() =>
+      withReadOnlyClient(async (client) => {
+        const { linhas } = await lerComLimite(
+          client,
+          `EXPLAIN (COSTS OFF, FORMAT TEXT) ${texto}`,
+          200,
+        );
+        const explicacao: ExplainRow[] = linhas.map((linha) => ({
+          chave: String(linha[0] ?? ''),
+          detalhe: String(linha[1] ?? ''),
+        }));
+        return { linhas: explicacao };
+      }),
+    );
   } catch (erro) {
+    if (erro instanceof ErroDeSobrecarga) throw erro;
     return { linhas: [], erro: explicarErro(mensagemDeErro(erro)) };
   }
 }

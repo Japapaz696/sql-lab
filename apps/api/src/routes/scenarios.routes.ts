@@ -4,7 +4,7 @@ import { buscarCenario } from '../scenarios/index.js';
 import { descreverEsquema } from '../services/schema.service.js';
 import { avaliarCenario, detalharCenario, listarCenarios } from '../services/scenarios.service.js';
 import { lerProgresso, registrarProgresso } from '../services/progress.service.js';
-import { executarConsulta, explicarConsulta } from '../services/sql.service.js';
+import { explicarConsulta } from '../services/sql.service.js';
 
 export const scenariosRouter = Router();
 
@@ -17,15 +17,37 @@ function idDoCenario(request: Request): string {
   return Array.isArray(valor) ? (valor[0] ?? '') : (valor ?? '');
 }
 
-/** Identificador da sessão de trabalho, para acompanhar o progresso. */
-function sessaoDe(request: Request): string {
-  const cabecalho = request.header('x-sessao-id');
-  if (cabecalho && /^[A-Za-z0-9_-]{8,64}$/.test(cabecalho)) return cabecalho;
-  return 'sem-sessao';
+/** Formato aceito para a sessão: o mesmo que o cliente gera (16 bytes em hex). */
+const PADRAO_DE_SESSAO = /^[A-Za-z0-9_-]{8,64}$/;
+
+/**
+ * Identificador da sessão de trabalho, obrigatório nas rotas que leem ou
+ * gravam progresso.
+ *
+ * Antes, a ausência do cabeçalho caía em uma sessão compartilhada
+ * (`'sem-sessao'`): dois clientes sem o cabeçalho viam o progresso um do outro.
+ * Agora a rota responde 400 e explica como enviar o identificador — um erro
+ * explícito é melhor do que um estado compartilhado silencioso.
+ */
+function sessaoDaRequisicao(request: Request, response: Response): string | null {
+  const cabecalho = request.header('x-sessao-id')?.trim() ?? '';
+
+  if (!PADRAO_DE_SESSAO.test(cabecalho)) {
+    response.status(400).json({
+      error:
+        'Cabeçalho x-sessao-id ausente ou inválido. Envie de 8 a 64 caracteres: letras, números, hífen ou sublinhado.',
+    });
+    return null;
+  }
+
+  return cabecalho;
 }
 
 scenariosRouter.get('/', async (request: Request, response: Response) => {
-  const progresso = await lerProgresso(sessaoDe(request));
+  const sessao = sessaoDaRequisicao(request, response);
+  if (!sessao) return;
+
+  const progresso = await lerProgresso(sessao);
 
   const cenarios = listarCenarios().map((cenario) => {
     const estado = progresso.get(cenario.id);
@@ -57,13 +79,16 @@ scenariosRouter.get('/esquema/tabelas', async (_request: Request, response: Resp
 });
 
 scenariosRouter.get('/:id', async (request: Request, response: Response) => {
+  const sessao = sessaoDaRequisicao(request, response);
+  if (!sessao) return;
+
   const cenario = detalharCenario(idDoCenario(request));
   if (!cenario) {
     response.status(404).json({ error: 'Cenário não encontrado' });
     return;
   }
 
-  const progresso = await lerProgresso(sessaoDe(request));
+  const progresso = await lerProgresso(sessao);
   const estado = progresso.get(cenario.id);
 
   response.json({
@@ -74,6 +99,9 @@ scenariosRouter.get('/:id', async (request: Request, response: Response) => {
 });
 
 scenariosRouter.post('/:id/execute', async (request: Request, response: Response) => {
+  const sessao = sessaoDaRequisicao(request, response);
+  if (!sessao) return;
+
   const sql = typeof request.body?.sql === 'string' ? request.body.sql : '';
 
   const avaliacao = await avaliarCenario(idDoCenario(request), sql);
@@ -82,15 +110,19 @@ scenariosRouter.post('/:id/execute', async (request: Request, response: Response
     return;
   }
 
-  const consulta = await executarConsulta(sql);
   const progresso = await registrarProgresso(
-    sessaoDe(request),
+    sessao,
     idDoCenario(request),
     avaliacao.verificacao.acertou,
   );
 
+  /**
+   * `avaliacao.consulta` é o resultado que a avaliação já produziu. Executar
+   * o mesmo SQL de novo aqui era trabalho duplicado — e pressão desnecessária
+   * sobre o pool.
+   */
   response.json({
-    consulta,
+    consulta: avaliacao.consulta,
     verificacao: avaliacao.verificacao,
     tentativas: progresso.tentativas,
     resolvido: progresso.resolvido,

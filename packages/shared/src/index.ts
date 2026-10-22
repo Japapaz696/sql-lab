@@ -61,8 +61,13 @@ export type QueryOutcome = {
 export type ScenarioCheck = {
   acertou: boolean;
   feedback: string;
-  linhasEsperadas: number;
-  linhasObtidas: number;
+  /**
+   * Quantas linhas a referência devolveu. `null` quando não houve comparação
+   * possível (a consulta do aluno falhou antes de produzir resultado).
+   */
+  linhasEsperadas: number | null;
+  /** Quantas linhas a consulta do aluno devolveu; `null` no mesmo caso. */
+  linhasObtidas: number | null;
 };
 
 export type ExecuteResponse = {

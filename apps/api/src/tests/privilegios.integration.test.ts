@@ -117,6 +117,51 @@ describe('separação de privilégios', () => {
     });
   });
 
+  describe('a tabela interna de progresso', () => {
+    it('não é legível pelo papel de execução', async () => {
+      const { rows } = await admin.query(
+        `SELECT has_table_privilege('sql_lab_exec', 'public.progresso_cenarios', 'SELECT') AS pode_ler`,
+      );
+
+      expect(rows[0].pode_ler).toBe(false);
+    });
+
+    it('a consulta do aluno é recusada, com mensagem didática', async () => {
+      const resultado = await executarConsulta('SELECT * FROM progresso_cenarios');
+
+      expect(resultado.ok).toBe(false);
+      expect(resultado.erro).toMatch(/interno do laboratório/i);
+    });
+
+    it('as nove tabelas do ERP continuam legíveis', async () => {
+      const { rows } = await admin.query(
+        `SELECT tablename,
+                has_table_privilege('sql_lab_exec', format('public.%I', tablename), 'SELECT')
+                  AS pode_ler
+         FROM pg_tables
+         WHERE schemaname = 'public' AND tablename <> 'progresso_cenarios'
+         ORDER BY tablename`,
+      );
+
+      expect(rows).toHaveLength(9);
+      expect(rows.every((linha: { pode_ler: boolean }) => linha.pode_ler)).toBe(true);
+    });
+
+    it('tabelas criadas depois não ganham SELECT por padrão', async () => {
+      await admin.query('CREATE TABLE tabela_criada_depois (id int)');
+      try {
+        const { rows } = await admin.query(
+          `SELECT has_table_privilege('sql_lab_exec', 'public.tabela_criada_depois', 'SELECT')
+                    AS pode_ler`,
+        );
+
+        expect(rows[0].pode_ler).toBe(false);
+      } finally {
+        await admin.query('DROP TABLE tabela_criada_depois');
+      }
+    });
+  });
+
   describe('isolamento da conexão administrativa', () => {
     it('a consulta do aluno não depende da conexão administrativa', async () => {
       // Uma conexão administrativa que não funciona: se o SQL do aluno

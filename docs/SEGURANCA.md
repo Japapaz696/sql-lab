@@ -107,10 +107,50 @@ recusa, antes de tocar em qualquer coisa, quando:
 
 ### O CORS é restrito
 
-A interface publicada fica em outro domínio que a API, então o navegador pide
+A interface publicada fica em outro domínio que a API, então o navegador pede
 autorização. `ALLOWED_ORIGIN` lista as origens liberadas — e só elas recebem o
 cabeçalho de autorização. Uma origem que não está na lista não recebe nada, e
 o navegador bloqueia a resposta.
+
+### O progresso de uma sessão não é legível por outra
+
+Cada navegador recebe um identificador aleatório de 16 bytes (`x-sessao-id`), e
+as rotas de cenário exigem o cabeçalho: sem ele, a API responde 400 em vez de
+cair num valor compartilhado. O progresso é gravado por sessão e cenário, e a
+listagem só devolve as tentativas daquela sessão.
+
+No banco, a tabela `progresso_cenarios` guarda todas as sessões, e o papel de
+execução **não tem `SELECT` nela** (`db/privilegios.sql` e a migração
+`db/migracoes/2026-10-22-isolar-progresso.sql`). Sem isso, o isolamento da API
+seria só de fachada: qualquer pessoa poderia ler a tabela pela rota de consulta
+livre. A tabela também não aparece em "Ver o esquema do ERP" — a lista de
+tabelas é explícita em `apps/api/src/database/tabelas-do-erp.ts`.
+
+O identificador não é autenticação: quem o tiver consegue ver o progresso
+daquela sessão. Ele é aleatório e não guarda dados pessoais, então perdê-lo não
+expõe identidade — apenas tentativas.
+
+### Limite de chamadas
+
+`/execute` e `/explain` têm limite por IP (padrão: 20 e 15 por minuto,
+respectivamente). A resposta 429 é JSON, com `Retry-After` em segundos e os
+cabeçalhos `RateLimit` e `RateLimit-Policy` (rascunho 7). A interface mostra o
+tempo de espera em vez de HTML do proxy.
+
+O limite é **por processo e em memória**: com duas instâncias da API, cada uma
+conta separadamente. Para o laboratório, uma instância no plano gratuito é o
+caso real; se um dia houver mais de uma, o armazenamento precisa ser
+compartilhado (Redis ou a própria tabela).
+
+### Fila e proteção do pool
+
+Cada consulta passa por um semáforo (`MAX_CONCURRENT_QUERIES`, padrão 4). O
+excedente espera na fila por até `QUEUE_WAIT_MS` (padrão 8 s); se não houver
+vaga, a resposta é 503 com `Retry-After`, não um 500. Sem esse controle, um
+pico esgotaria as cinco conexões do pool e derrubaria também o `/ready`.
+
+> O valor conta consultas, não requisições: cada execução usa duas (aluno e
+> referência). O mínimo útil é 2.
 
 ## O limite de linhas é real
 
@@ -130,13 +170,16 @@ avisa que o resultado foi truncado.
 
 ## Tempo e recursos
 
-| Controle                  | Valor        | Onde                                  |
-| ------------------------- | ------------ | ------------------------------------- |
-| Tempo por consulta        | 5 s (padrão) | `statement_timeout`                   |
-| Tempo de transação ociosa | 5 s          | `idle_in_transaction_session_timeout` |
-| Tempo de conexão          | 30 s         | pool do `pg`                          |
-| Linhas por resultado      | 200          | cursor                                |
-| Conexões simultâneas      | 5 (+3 admin) | pool                                  |
+| Controle                  | Valor                   | Onde                                  |
+| ------------------------- | ----------------------- | ------------------------------------- |
+| Tempo por consulta        | 5 s (padrão)            | `statement_timeout`                   |
+| Tempo de transação ociosa | 5 s                     | `idle_in_transaction_session_timeout` |
+| Tempo de conexão          | 30 s                    | pool do `pg`                          |
+| Linhas por resultado      | 200                     | cursor                                |
+| Conexões simultâneas      | 5 (+3 admin)            | pool                                  |
+| Consultas simultâneas     | 4                       | semáforo (`MAX_CONCURRENT_QUERIES`)   |
+| Espera na fila            | 8 s                     | `QUEUE_WAIT_MS`                       |
+| Chamadas por IP           | 20 execute / 15 explain | `express-rate-limit`, janela de 60 s  |
 
 O tempo de conexão é de 30 segundos porque o banco hiberna: num plano
 gratuito, o primeiro acesso depois de um tempo sem tráfego passa por uma
@@ -151,6 +194,13 @@ consulta, e várias instruções juntas continuam sendo recusadas.
 **Leitura não é restrita.** Quem usa a interface consegue ler qualquer linha do
 banco. Isso é aceitável no laboratório, porque o banco é sintético e público —
 mas é o limite a considerar antes de apontar esta aplicação para um banco real.
+
+**A sessão não é autenticada.** O identificador é aleatório e imprevisível, mas
+não há login: quem tiver o valor vê o progresso daquela sessão. Como não há
+dado pessoal, o impacto é limitado a tentativas.
+
+**O limite de chamadas é por processo.** Duas instâncias da API contam
+separadamente. Para o plano gratuito (uma instância), o limite vale integralmente.
 
 Para um banco real, o que precisaria mudar:
 
@@ -224,9 +274,23 @@ real está na tabela de clientes.
 nome de banco, confirmação, senha presente, senha forte, senha diferente do
 nome do papel. E que o script de privilégios não tem senha literal.
 
+`apps/api/src/tests/sessoes.integration.test.ts` — o isolamento por sessão: as
+três rotas de cenário respondem 400 sem `x-sessao-id`, duas sessões não
+compartilham tentativas, e a mesma sessão continua de onde parou.
+
+`apps/api/src/tests/concorrencia.test.ts` — a fila e o limite de chamadas: o
+semáforo respeita o máximo, a espera estoura em `ErroDeSobrecarga` (503), e a
+rota devolve 429 em JSON com `Retry-After` e os cabeçalhos `RateLimit` depois
+do limite.
+
 `apps/api/src/tests/infra.integration.test.ts` — a API na internet: health check
 sem tocar o banco, readiness com o estado do banco, CORS liberando as origens
-declaradas e recusando as outras.
+declaradas e recusando as outras, preflight, cabeçalhos do helmet e 400 para
+corpo que não é JSON.
+
+A interface tem testes próprios (`apps/web/src/services/api.test.ts`) para as
+respostas que não vêm da API: 429 com `Retry-After`, HTML de WAF/proxy em 403,
+200 em HTML e JSON inválido — nenhum deles pode virar HTML cru na tela.
 
 O CI, além da suíte, confere que **a API montada sobe em produção** com as
 duas conexões separadas — e que **recusa subir** quando elas não estão.

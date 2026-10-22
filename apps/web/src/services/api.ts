@@ -101,6 +101,40 @@ function semResposta(erro: unknown): boolean {
   );
 }
 
+/** Lê o `Retry-After` quando ele vem em segundos. */
+function segundosDeEspera(resposta: Response): number | null {
+  const bruto = resposta.headers.get('retry-after');
+  if (!bruto) return null;
+  const valor = Number(bruto);
+  return Number.isFinite(valor) && valor > 0 ? Math.ceil(valor) : null;
+}
+
+/**
+ * Mensagem para respostas que não trazem um `error` em JSON.
+ *
+ * Acontece quando um WAF, um proxy ou a própria hospedagem responde antes da
+ * API: vem uma página HTML de bloqueio, com 403 ou 502, que não deve ser
+ * mostrada ao aluno. O texto explica o que fazer sem despejar HTML na tela.
+ */
+function mensagemDoStatus(status: number, esperaEmSegundos: number | null): string {
+  if (status === 429) {
+    const espera = esperaEmSegundos ? ` Aguarde ${esperaEmSegundos} segundo(s).` : '';
+    return (
+      `Muitas consultas em pouco tempo.${espera} ` +
+      'O laboratório limita a quantidade por minuto para continuar disponível para todos.'
+    );
+  }
+
+  if (status === 403 || status === 502 || status === 503 || status === 504) {
+    return (
+      'O servidor não entregou a resposta do laboratório. Isso costuma ser um bloqueio ' +
+      'temporário do proxy ou da hospedagem. Tente de novo em alguns segundos.'
+    );
+  }
+
+  return `Erro ${status} ao falar com a API.`;
+}
+
 async function requisitar<T>(caminho: string, opcoes: RequestInit = {}): Promise<T> {
   const headers = new Headers(opcoes.headers);
   headers.set('X-Sessao-Id', idDaSessao());
@@ -120,18 +154,49 @@ async function requisitar<T>(caminho: string, opcoes: RequestInit = {}): Promise
       });
       clearTimeout(tempo);
 
+      const tipo = (resposta.headers.get('content-type') ?? '').toLowerCase();
+      const veioJson = tipo.includes('json');
+
       if (!resposta.ok) {
-        let mensagem = `Erro ${resposta.status} ao falar com a API.`;
-        try {
-          const corpo = (await resposta.json()) as { error?: string };
-          if (corpo.error) mensagem = corpo.error;
-        } catch {
-          // Resposta sem JSON: fica a mensagem padrão.
+        let mensagem: string | null = null;
+
+        // Só tenta interpretar como JSON quando o servidor diz que é JSON:
+        // uma página HTML de bloqueio não deve virar mensagem de erro.
+        if (veioJson) {
+          try {
+            const corpo = (await resposta.json()) as { error?: unknown };
+            if (typeof corpo.error === 'string' && corpo.error.trim()) {
+              mensagem = corpo.error;
+            }
+          } catch {
+            // Corpo inválido: cai na mensagem padrão do status.
+          }
         }
-        throw new ErroDeApi(resposta.status, mensagem);
+
+        throw new ErroDeApi(
+          resposta.status,
+          mensagem ?? mensagemDoStatus(resposta.status, segundosDeEspera(resposta)),
+        );
       }
 
-      return (await resposta.json()) as T;
+      // 200 com HTML (portal de bloqueio, página de erro do proxy) não é
+      // resposta da API: melhor um erro claro do que um JSON inválido.
+      if (!veioJson) {
+        throw new ErroDeApi(
+          502,
+          'A resposta da API veio em um formato inesperado. Um proxy ou firewall pode ter ' +
+            'bloqueado a chamada. Tente de novo em alguns segundos.',
+        );
+      }
+
+      try {
+        return (await resposta.json()) as T;
+      } catch {
+        throw new ErroDeApi(
+          502,
+          'A API respondeu, mas o conteúdo veio incompleto. Tente de novo em alguns segundos.',
+        );
+      }
     } catch (erro) {
       clearTimeout(tempo);
       ultimoErro = erro;

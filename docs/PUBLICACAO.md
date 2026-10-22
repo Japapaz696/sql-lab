@@ -166,6 +166,69 @@ psql "$DATABASE_ADMIN_URL" -c "SELECT count(*) FROM clientes"
 # esperado: 6
 ```
 
+## Passo 2.5 — Banco que já está no ar: fechar o progresso das sessões
+
+Se o banco já foi preparado antes desta versão, ele ainda tem uma brecha: o
+papel de execução consegue ler `progresso_cenarios`, a tabela interna que
+guarda as tentativas de **todas** as sessões. O isolamento por sessão na API
+não protege o dado no banco — quem descobrisse a sessão de outra pessoa
+poderia lê-la pela rota de consulta livre.
+
+`db/privilegios.sql` já nasceu corrigido para bancos novos. Para um banco que
+já está no ar, a migração é separada e **idempotente**:
+
+```bash
+psql "$DATABASE_ADMIN_URL" -v ON_ERROR_STOP=1 \
+  -f db/migracoes/2026-10-22-isolar-progresso.sql
+```
+
+Ela roda com o **dono do schema** (nunca com `sql_lab_exec`) e faz três coisas:
+
+1. revoga a concessão padrão de `SELECT` para tabelas futuras;
+2. revoga todo acesso a `public.progresso_cenarios`;
+3. reafirma `SELECT` apenas nas nove tabelas do ERP.
+
+Pode ser executada mais de uma vez sem efeito colateral. A API não precisa ser
+reiniciada: o PostgreSQL aplica os privilégios na hora.
+
+### Conferir o resultado
+
+```bash
+# deve devolver false
+psql "$DATABASE_ADMIN_URL" -c \
+  "SELECT has_table_privilege('sql_lab_exec', 'public.progresso_cenarios', 'SELECT') AS pode_ler_progresso;"
+
+# deve devolver nove linhas, todas com pode_ler = true
+psql "$DATABASE_ADMIN_URL" -c \
+  "SELECT tablename, has_table_privilege('sql_lab_exec', format('public.%I', tablename), 'SELECT') AS pode_ler
+     FROM pg_tables
+    WHERE schemaname = 'public' AND tablename <> 'progresso_cenarios'
+    ORDER BY tablename;"
+```
+
+E, como o papel de execução:
+
+```bash
+psql "$DATABASE_URL" -c "SELECT count(*) FROM progresso_cenarios;"
+# esperado: ERROR: permission denied for table progresso_cenarios
+```
+
+A API também deixa de listar a tabela no esquema do ERP — a lista de tabelas é
+explícita em `apps/api/src/database/tabelas-do-erp.ts`.
+
+### Reversão
+
+Só se for realmente necessário desfazer o isolamento:
+
+```sql
+GRANT SELECT ON TABLE public.progresso_cenarios TO sql_lab_exec;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT ON TABLES TO sql_lab_exec;
+```
+
+Isso reabre a leitura do progresso de todas as sessões pelo papel de execução.
+Prefira corrigir a causa em vez de reverter.
+
 ## Passo 3 — Publicar a API no Render
 
 1. <https://dashboard.render.com> → **New → Web Service** → conecte o
@@ -218,15 +281,30 @@ CI e não no deploy.
 
 3. Em **Environment**, defina:
 
-   | Chave                | Valor                                                          |
-   | -------------------- | -------------------------------------------------------------- |
-   | `NODE_ENV`           | `production`                                                   |
-   | `DATABASE_URL`       | `sql_lab_exec` na string **pooled** do Neon                    |
-   | `DATABASE_ADMIN_URL` | dono do schema na string **direct** do Neon                    |
-   | `ALLOWED_ORIGIN`     | a URL da interface, sem barra final                            |
-   | `MAX_RESULT_ROWS`    | `200`                                                          |
-   | `QUERY_TIMEOUT_MS`   | `5000`                                                         |
-   | `PORT`               | `3000` (o Render define o `PORT` sozinho; pode deixar de fora) |
+   | Chave                    | Valor                                                          |
+   | ------------------------ | -------------------------------------------------------------- |
+   | `NODE_ENV`               | `production`                                                   |
+   | `DATABASE_URL`           | `sql_lab_exec` na string **pooled** do Neon                    |
+   | `DATABASE_ADMIN_URL`     | dono do schema na string **direct** do Neon                    |
+   | `ALLOWED_ORIGIN`         | a URL da interface, sem barra final                            |
+   | `MAX_RESULT_ROWS`        | `200`                                                          |
+   | `QUERY_TIMEOUT_MS`       | `5000`                                                         |
+   | `MAX_CONCURRENT_QUERIES` | `4` (mínimo útil: `2`)                                         |
+   | `QUEUE_WAIT_MS`          | `8000`                                                         |
+   | `RATE_LIMIT_EXECUTE_MAX` | `20` por minuto, por IP                                        |
+   | `RATE_LIMIT_EXPLAIN_MAX` | `15` por minuto, por IP                                        |
+   | `RATE_LIMIT_WINDOW_MS`   | `60000`                                                        |
+   | `PORT`                   | `3000` (o Render define o `PORT` sozinho; pode deixar de fora) |
+
+   > As quatro variáveis de limite têm padrão no código; só defina se quiser
+   > mudar o comportamento. O limite é por IP e por janela de 60 s, com
+   > `Retry-After` na resposta 429. Atrás do proxy do Render, a API confia em
+   > **um** salto de `X-Forwarded-For` — confiar em todos permitiria burlar o
+   > limite forjando o cabeçalho.
+   >
+   > `MAX_CONCURRENT_QUERIES` conta consultas SQL, não requisições: cada
+   > execução usa duas (a do aluno e a de referência). Com `1`, a própria
+   > consulta de referência não caberia e toda requisição acabaria em 503.
 
    > `ALLOWED_ORIGIN` aceita uma lista separada por vírgula, para a mesma API
    > servir à interface de produção e à de desenvolvimento.
