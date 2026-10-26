@@ -50,7 +50,7 @@ services:
     # dependesse do banco, o serviço entraria em reinício contínuo — que é
     # mais caro do que esperar o banco acordar.
     healthCheckPath: /health
-    autoDeploy: true
+    autoDeploy: false
     envVars:
       - key: NODE_ENV
         value: production
