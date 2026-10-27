@@ -447,6 +447,20 @@ button.discreto {
   margin-top: 1.25rem;
 }
 
+.resultado-topo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.exportacoes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .tabela-scroll {
   overflow-x: auto;
   border: 1px solid var(--borda);
