@@ -3,6 +3,7 @@ import type { CellValue, ExplainRow, QueryOutcome } from '@sql-lab/shared';
 import { env } from '../config/env.js';
 import { lerComLimite, withReadOnlyClient } from '../database/pool.js';
 import { ErroDeSobrecarga, semaforoDeConsultas } from './concorrencia.js';
+import { validarConsultaSql } from './sql-validation.js';
 
 /**
  * Normaliza um valor do PostgreSQL para algo que o JSON transporte sem
@@ -97,7 +98,8 @@ export async function executarConsulta(sql: string): Promise<QueryOutcome> {
   const inicio = Date.now();
   const texto = sql.trim();
 
-  if (!texto) {
+  const validacao = validarConsultaSql(texto);
+  if (!validacao.ok) {
     return {
       ok: false,
       colunas: [],
@@ -105,7 +107,7 @@ export async function executarConsulta(sql: string): Promise<QueryOutcome> {
       totalLinhas: 0,
       truncado: false,
       duracaoMs: 0,
-      erro: 'Escreva uma consulta SQL antes de executar.',
+      erro: validacao.erro ?? 'Consulta inválida.',
     };
   }
 
@@ -154,8 +156,9 @@ export async function explicarConsulta(
   sql: string,
 ): Promise<{ linhas: ExplainRow[]; erro?: string }> {
   const texto = sql.trim();
-  if (!texto) {
-    return { linhas: [], erro: 'Escreva uma consulta SQL antes de explicar.' };
+  const validacao = validarConsultaSql(texto);
+  if (!validacao.ok) {
+    return { linhas: [], erro: validacao.erro ?? 'Consulta inválida.' };
   }
 
   try {

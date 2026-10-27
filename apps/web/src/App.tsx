@@ -235,6 +235,47 @@ export function App() {
     }
   }
 
+  function exportarResultado(formato: 'csv' | 'json') {
+    if (!resultado || !resultado.ok || !resultado.colunas.length) return;
+
+    let conteudo = '';
+    let tipo = '';
+    let extensao = '';
+
+    if (formato === 'csv') {
+      const linhas = [resultado.colunas, ...resultado.linhas];
+      conteudo = linhas
+        .map((linha) =>
+          linha
+            .map((celula) => {
+              const texto = celula === null ? '' : String(celula);
+              return /[",\n]/.test(texto) ? `"${texto.replace(/"/g, '""')}"` : texto;
+            })
+            .join(','),
+        )
+        .join('\n');
+      tipo = 'text/csv;charset=utf-8;';
+      extensao = 'csv';
+    } else {
+      const objetos = resultado.linhas.map((linha) =>
+        Object.fromEntries(resultado.colunas.map((coluna, indice) => [coluna, linha[indice] ?? null])),
+      );
+      conteudo = JSON.stringify(objetos, null, 2);
+      tipo = 'application/json;charset=utf-8;';
+      extensao = 'json';
+    }
+
+    const blob = new Blob([conteudo], { type: tipo });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `sql-lab-resultado.${extensao}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   const resolvidosAgora = cenarios.filter((cenario) => cenario.resolvido).length;
 
   return (
@@ -432,9 +473,19 @@ export function App() {
 
                   {resultado && resultado.ok ? (
                     <div className="resultado">
-                      <p className="suave">
-                        {resultado.totalLinhas} linha(s) em {resultado.duracaoMs} ms
-                      </p>
+                      <div className="resultado-topo">
+                        <p className="suave">
+                          {resultado.totalLinhas} linha(s) em {resultado.duracaoMs} ms
+                        </p>
+                        <div className="exportacoes">
+                          <button type="button" className="discreto pequeno" onClick={() => exportarResultado('csv')}>
+                            Exportar CSV
+                          </button>
+                          <button type="button" className="discreto pequeno" onClick={() => exportarResultado('json')}>
+                            Exportar JSON
+                          </button>
+                        </div>
+                      </div>
                       {resultado.truncado ? (
                         <p className="aviso-truncamento" role="status">
                           Resultado truncado em 200 linhas. A consulta traz mais dados; use um
